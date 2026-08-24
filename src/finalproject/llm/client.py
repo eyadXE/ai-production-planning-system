@@ -18,7 +18,7 @@ from finalproject.llm.prompts import SYSTEM_PROMPT, USER_TEMPLATE
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS_PER_PROVIDER = 2
-RETRY_BACKOFF_S = 0.4
+RETRY_BACKOFF_S = 0.15
 
 
 def extract_json(content: str) -> dict[str, Any] | None:

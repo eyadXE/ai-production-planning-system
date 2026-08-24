@@ -42,6 +42,11 @@ export default function Estimate() {
           <div className="flex items-center gap-3">
             <h2 className="font-mono text-lg font-bold text-foreground">{result.spec} → {result.decision}</h2>
             <span className="border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">clause {result.key_clause}</span>
+              {result.parsed_by && (
+                <span className={`px-1.5 py-0.5 font-mono text-[9px] ${result.parsed_by.startsWith("llm") ? "border border-primary/40 text-primary" : "border border-border text-muted-foreground"}`}>
+                  {result.parsed_by === "rules" ? "parsed by rule engine" : `LLM · ${result.parsed_by.split(":")[1]}`}
+                </span>
+              )}
           </div>
 
           {result.fab_hours != null ? (

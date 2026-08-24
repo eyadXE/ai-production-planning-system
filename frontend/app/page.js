@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { ArrowRight } from "lucide-react";
 import { getUser } from "../lib/api";
+import ThemeToggle from "../components/ThemeToggle";
 
 const CATEGORIES = [
   {
@@ -46,6 +47,7 @@ export default function Landing() {
           <img src="/ousus-logo.png" alt="Ousus" className="h-12 w-auto" />
         </Link>
         <div className="flex items-center gap-3">
+          <ThemeToggle />
           {user ? (
             <Link href={appHref} className="bg-primary px-4 py-2 font-mono text-xs font-bold text-primary-foreground hover:opacity-90">Open app</Link>
           ) : (

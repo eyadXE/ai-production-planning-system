@@ -201,3 +201,14 @@ def audit(user: User = Depends(require_roles("manager")),
 def daily_summary(user: User = Depends(require_roles("engineer", "manager")),
                   session: Session = Depends(get_session)):
     return tracking.daily_summary(session)
+
+
+@router.get("/llm/status")
+def llm_status(user: User = Depends(get_current_user)):
+    """Which LLM providers are configured, for the UI status chip."""
+    from finalproject.llm.base import configured_chain
+
+    return {
+        "providers": [c.name for c in configured_chain()],
+        "primary": (configured_chain() or [None])[0].name if configured_chain() else None,
+    }

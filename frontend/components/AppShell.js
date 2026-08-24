@@ -8,6 +8,7 @@ import {
   LayoutDashboard, MessageSquare, X, Menu, LogOut,
 } from "lucide-react";
 import { clearSession } from "../lib/api";
+import ThemeToggle from "./ThemeToggle";
 
 const NAV = [
   { href: "/summary", label: "Overview", icon: LayoutDashboard, roles: ["engineer", "manager", "viewer"] },
@@ -85,8 +86,11 @@ export default function AppShell({ active, title, subtitle, children }) {
             </div>
             <div className="font-mono text-xs font-bold sm:hidden">OUSUS / {active}</div>
           </div>
-          <div className="hidden items-center gap-2 border-l border-border pl-4 sm:flex">
-            <div className="grid size-7 place-items-center bg-chart-2 font-mono text-[10px] font-bold text-primary-foreground">{initials}</div>
+          <div className="flex items-center gap-4">
+            <ThemeToggle />
+            <div className="hidden items-center gap-2 border-l border-border pl-4 sm:flex">
+              <div className="grid size-7 place-items-center bg-chart-2 font-mono text-[10px] font-bold text-primary-foreground">{initials}</div>
+            </div>
           </div>
         </header>
         <main className="mx-auto flex max-w-[1440px] flex-col gap-8 p-5 sm:p-8">
