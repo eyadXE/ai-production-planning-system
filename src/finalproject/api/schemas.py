@@ -9,8 +9,8 @@ class SignupIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     full_name: str
-    role: str
-    account_code: str | None = None
+    account_code: str | None = None      # existing customer
+    company_name: str | None = None      # new customer -> auto retail account
 
 
 class LoginIn(BaseModel):

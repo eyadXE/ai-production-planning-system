@@ -58,17 +58,37 @@ def test_signup_client_with_account():
     assert me.json()["email"] == "newclient@rowad.com"
 
 
-def test_signup_client_requires_account_code():
-    r = client.post(
-        "/auth/signup",
-        json={
-            "email": "noclient@x.com",
-            "password": "supersecret1",
-            "full_name": "X",
-            "role": "client",
-        },
-    )
-    assert r.status_code == 400
+def test_signup_new_customer_without_account_code():
+    """A brand-new customer gets an auto-provisioned direct retail account."""
+    r = client.post("/auth/signup", json={
+        "email": "walkin@customer.com",
+        "password": "supersecret1",
+        "full_name": "Walk-in Customer",
+    })
+    assert r.status_code == 201
+    body = r.json()
+    assert body["user"]["account_id"] is not None
+    assert body["user"]["role"] == "client"
+
+    from finalproject.db.database import SessionLocal
+    from finalproject.db.models import Account
+    with SessionLocal() as s:
+        acc = s.get(Account, body["user"]["account_id"])
+        assert acc.tier == "retail"
+        assert acc.margin_floor == 0.28
+
+
+def test_staff_role_cannot_self_register():
+    """Even forcing role=manager in the payload, signup yields a client."""
+    r = client.post("/auth/signup", json={
+        "email": "sneaky@oususapp.com",
+        "password": "supersecret1",
+        "full_name": "Sneaky",
+        "role": "manager",
+        "account_code": "AC-01",
+    })
+    assert r.status_code == 201
+    assert r.json()["user"]["role"] == "client"
 
 
 def test_signup_duplicate_email_conflict():
@@ -84,12 +104,13 @@ def test_signup_duplicate_email_conflict():
 
 
 def test_signup_staff_roles_forbidden():
-    """Staff accounts are admin-provisioned — self-registration is refused."""
+    """role field is dropped from the schema — signup always yields a client."""
     r = client.post("/auth/signup", json={
         "email": "selfmade-manager@oususapp.com",
         "password": "supersecret1", "full_name": "Sneaky", "role": "manager",
     })
-    assert r.status_code == 403
+    assert r.status_code == 201
+    assert r.json()["user"]["role"] == "client"
 
 
 def test_login_wrong_password():

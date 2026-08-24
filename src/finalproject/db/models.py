@@ -228,6 +228,7 @@ class Notification(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    to_email: Mapped[str] = mapped_column(String(160), default="")
     template: Mapped[str] = mapped_column(String(48))  # plan_accepted | ...
     payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | sent | failed

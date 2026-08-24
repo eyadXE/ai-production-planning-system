@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finalproject.db.models import Approval, Estimate, Project, User
+from finalproject.db.models import Account, Approval, Estimate, Project, User
 
 
 class ApprovalError(Exception):
@@ -11,6 +11,13 @@ class ApprovalError(Exception):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+
+
+def account_email(session: Session, account_id: int) -> bool:
+    """Whether the client account has any contactable user."""
+    return session.scalar(
+        select(User.id).where(User.account_id == account_id).limit(1)
+    ) is not None
 
 
 def queue_plan_release(session: Session, estimate: Estimate,
@@ -61,6 +68,18 @@ def decide(session: Session, approval_id: int, approver: User,
                 project.release_status = (
                     "released" if approved else "rejected"
                 )
+                if approved and account_email(session, project.account_id):
+                    from finalproject.tracking.notify import send_email
+
+                    schedule = (estimate.citations_json or {}).get("schedule") or {}
+                    send_email(
+                        session, project.account_id, "plan_accepted",
+                        {
+                            "code": project.code,
+                            "title": project.title,
+                            "finish": schedule.get("planned_finish", "to be confirmed"),
+                        },
+                    )
     session.commit()
     session.refresh(approval)
     return approval

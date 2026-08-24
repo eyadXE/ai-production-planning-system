@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from finalproject.api.auth_routes import router as auth_router
 from finalproject.api.board_routes import router as board_router
+from finalproject.api.intake_routes import router as intake_router
 from finalproject.db.database import init_db
 
 app = FastAPI(title="Ousus Production Platform", version="0.1.0")
@@ -22,6 +23,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(board_router)
+app.include_router(intake_router)
 
 
 @app.on_event("startup")

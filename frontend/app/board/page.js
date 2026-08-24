@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../../lib/api";
+import { api, getUser } from "../../lib/api";
 import Nav from "../../components/Nav";
 
 export default function Board() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const isManager = getUser()?.role === "manager";
 
   const load = useCallback(async () => {
     try {
@@ -24,6 +25,20 @@ export default function Board() {
     setError("");
     try {
       await api(`/projects/${code}/stage`, { method: "PATCH", body: {} });
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove(code) {
+    if (!confirm(`Delete project ${code}? This cannot be undone.`)) return;
+    setBusy(code);
+    setError("");
+    try {
+      await api(`/projects/${code}`, { method: "DELETE" });
       await load();
     } catch (e) {
       setError(e.message);
@@ -67,6 +82,13 @@ export default function Board() {
                             disabled={busy === p.code}
                             onClick={() => advance(p.code)}>
                       Advance →
+                    </button>
+                  )}
+                  {isManager && (
+                    <button className="btn red" style={{ marginTop: 8, padding: "5px 10px", marginLeft: 6 }}
+                            disabled={busy === p.code}
+                            onClick={() => remove(p.code)}>
+                      Delete
                     </button>
                   )}
                 </div>

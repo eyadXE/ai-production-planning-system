@@ -21,8 +21,8 @@ def signup(body: SignupIn, session: Session = Depends(get_session)):
             email=body.email,
             password=body.password,
             full_name=body.full_name,
-            role=body.role,
             account_code=body.account_code,
+            company_name=body.company_name,
         )
     except AuthError as exc:
         raise HTTPException(exc.status_code, exc.message)

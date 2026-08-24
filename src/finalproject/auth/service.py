@@ -23,6 +23,7 @@ def create_user(
     full_name: str,
     role: str = "client",
     account_code: str | None = None,
+    company_name: str | None = None,
 ) -> User:
     email = email.strip().lower()
     # Signup is for clients only — staff accounts are provisioned by the
@@ -33,14 +34,19 @@ def create_user(
             "admin and cannot be self-registered", 403)
     if len(password) < 8:
         raise AuthError("password must be at least 8 characters")
-    if not account_code:
-        raise AuthError("client users must provide their company account code")
 
-    account_id = None
     if account_code:
         account = session.scalar(select(Account).where(Account.code == account_code))
         if not account:
             raise AuthError(f"unknown account code '{account_code}'", 404)
+        account_id = account.id
+    else:
+        # New customer — auto-provision a direct retail account.
+        name = (company_name or full_name or email.split("@")[0]).strip()
+        code = next_account_code(session)
+        account = Account(code=code, name=name, tier="retail", margin_floor=0.28)
+        session.add(account)
+        session.flush()
         account_id = account.id
 
     if session.scalar(select(User).where(User.email == email)):
@@ -50,12 +56,19 @@ def create_user(
         email=email,
         password_hash=hash_password(password),
         full_name=full_name.strip() or email,
-        role=role,
+        role="client",
         account_id=account_id,
     )
     session.add(user)
     session.commit()
     return user
+
+
+def next_account_code(session: Session) -> str:
+    codes = session.scalars(select(Account.code)).all()
+    nums = [int(c.split("-")[1]) for c in codes
+            if c.startswith("AC-") and c.split("-")[1].isdigit()]
+    return f"AC-{max(nums, default=0) + 1:02d}"
 
 
 def authenticate(session: Session, email: str, password: str) -> User:
