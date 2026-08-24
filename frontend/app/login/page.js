@@ -50,20 +50,13 @@ export default function Login() {
             <>
               <label>Full name</label>
               <input value={form.full_name} onChange={set("full_name")} required />
-              <label>Role</label>
-              <select value={form.role} onChange={set("role")}>
-                <option value="client">Client</option>
-                <option value="engineer">Engineer / Estimator</option>
-                <option value="manager">Manager</option>
-                <option value="viewer">Viewer</option>
-              </select>
-              {form.role === "client" && (
-                <>
-                  <label>Company account code</label>
-                  <input placeholder="AC-01" value={form.account_code}
-                         onChange={set("account_code")} required />
-                </>
-              )}
+              <label>Company account code</label>
+              <input placeholder="AC-01" value={form.account_code}
+                     onChange={set("account_code")} required />
+              <p className="meta" style={{ color: "var(--muted)", fontSize: 12 }}>
+                Staff accounts are provisioned by the admin — sign-up is for
+                clients only.
+              </p>
             </>
           )}
           <div style={{ marginTop: 18 }}>

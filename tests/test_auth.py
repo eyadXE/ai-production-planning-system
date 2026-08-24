@@ -76,10 +76,20 @@ def test_signup_duplicate_email_conflict():
         "email": "dup@oususapp.com",
         "password": "supersecret1",
         "full_name": "Dup",
-        "role": "viewer",
+        "role": "client",
+        "account_code": "AC-03",
     }
     assert client.post("/auth/signup", json=payload).status_code == 201
     assert client.post("/auth/signup", json=payload).status_code == 409
+
+
+def test_signup_staff_roles_forbidden():
+    """Staff accounts are admin-provisioned — self-registration is refused."""
+    r = client.post("/auth/signup", json={
+        "email": "selfmade-manager@oususapp.com",
+        "password": "supersecret1", "full_name": "Sneaky", "role": "manager",
+    })
+    assert r.status_code == 403
 
 
 def test_login_wrong_password():

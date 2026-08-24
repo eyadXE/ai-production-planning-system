@@ -21,15 +21,19 @@ def create_user(
     email: str,
     password: str,
     full_name: str,
-    role: str,
+    role: str = "client",
     account_code: str | None = None,
 ) -> User:
     email = email.strip().lower()
-    if role not in VALID_ROLES:
-        raise AuthError(f"invalid role '{role}'; must be one of {VALID_ROLES}")
+    # Signup is for clients only — staff accounts are provisioned by the
+    # admin via seeding/management, never self-registered.
+    if role != "client":
+        raise AuthError(
+            "staff accounts (engineer/manager/viewer) are provisioned by the "
+            "admin and cannot be self-registered", 403)
     if len(password) < 8:
         raise AuthError("password must be at least 8 characters")
-    if role == "client" and not account_code:
+    if not account_code:
         raise AuthError("client users must provide their company account code")
 
     account_id = None
