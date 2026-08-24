@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
-  BarChart3, Box, Factory, FileCheck2, Gauge, Hammer,
-  LayoutDashboard, MessageSquare, Settings2, X, Menu, LogOut,
+  BarChart3, Box, FileCheck2, Gauge, Hammer,
+  LayoutDashboard, MessageSquare, X, Menu, LogOut,
 } from "lucide-react";
 import { clearSession } from "../lib/api";
 
@@ -38,11 +38,7 @@ export default function AppShell({ active, title, subtitle, children }) {
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-sidebar transition-transform lg:static lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex h-20 items-center gap-3 border-b border-border px-6">
           <Link href="/" className="flex items-center gap-3">
-            <div className="grid size-8 place-items-center bg-primary text-primary-foreground"><Factory className="size-4" /></div>
-            <div>
-              <p className="font-mono text-base font-bold tracking-tight text-sidebar-foreground">OUSUS</p>
-              <p className="font-mono text-[9px] uppercase tracking-[0.24em] text-muted-foreground">Operations OS</p>
-            </div>
+            <img src="/ousus-logo.png" alt="Ousus" className="h-10 w-auto" />
           </Link>
           <button aria-label="Close menu" onClick={() => setMobileOpen(false)} className="ml-auto lg:hidden"><X className="size-4" /></button>
         </div>

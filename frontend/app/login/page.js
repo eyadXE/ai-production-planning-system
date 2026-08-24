@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Factory } from "lucide-react";
+
 import { api, setSession } from "../../lib/api";
 
 function LoginInner() {
@@ -51,13 +51,7 @@ function LoginInner() {
     <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <div className="w-full max-w-md border border-border bg-card p-8">
         <div className="flex items-center gap-3">
-          <div className="grid size-9 place-items-center bg-primary text-primary-foreground">
-            <Factory className="size-4" />
-          </div>
-          <div>
-            <p className="font-mono text-base font-bold tracking-tight text-foreground">OUSUS</p>
-            <p className="font-mono text-[9px] uppercase tracking-[0.24em] text-muted-foreground">Operations OS</p>
-          </div>
+          <img src="/ousus-logo.png" alt="Ousus" className="h-12 w-auto" />
         </div>
 
         <h1 className="mt-6 font-mono text-xl font-bold text-foreground">
