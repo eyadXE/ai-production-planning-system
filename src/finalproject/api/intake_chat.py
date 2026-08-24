@@ -104,7 +104,7 @@ def _history(session_db: Session, cs: ChatSession) -> str:
         select(ChatMessage).where(ChatMessage.session_id == cs.id)
         .order_by(ChatMessage.id)
     ).all()
-    return "\n".join(f"{m.role.upper()}: {m.content}" for m in msgs[-14:])
+    return "\n".join(f"{m.role.upper()}: {m.content}" for m in msgs[-8:])
 
 
 @router.post("/start")

@@ -23,8 +23,9 @@ def _openai_style(config: ProviderConfig, api_key: str | None,
             {"role": "user", "content": user},
         ],
         "temperature": 0,
-        "response_format": {"type": "json_object"},
     }
+    if config.json_mode:
+        payload["response_format"] = {"type": "json_object"}
     try:
         resp = httpx.post(config.base_url, json=payload,
                           headers=headers, timeout=TIMEOUT_S)

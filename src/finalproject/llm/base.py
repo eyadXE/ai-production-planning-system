@@ -24,6 +24,7 @@ class ProviderConfig:
     base_url: str
     kind: str               # gemini | openai | ollama
     daily_request_budget: int = 1400   # conservative free-tier headroom
+    json_mode: bool = True  # some models choke on response_format=json_object
 
 
 DEFAULT_CHAIN = [
@@ -33,9 +34,9 @@ DEFAULT_CHAIN = [
         "openai", 1400,
     ),
     ProviderConfig(
-        "groq", "GROQ_API_KEY", "qwen/qwen3.6-27b",
+        "groq", "GROQ_API_KEY", "openai/gpt-oss-120b",
         "https://api.groq.com/openai/v1/chat/completions",
-        "openai", 700,
+        "openai", 700, json_mode=False,
     ),
     ProviderConfig(
         "openrouter-free", "OPENROUTER_API_KEY",

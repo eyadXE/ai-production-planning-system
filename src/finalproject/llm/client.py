@@ -82,6 +82,8 @@ class LLMClient:
                 except Exception as exc:  # noqa: BLE001 — any failure falls through
                     log.warning("%s attempt %d failed: %s",
                                 config.name, attempt + 1, exc)
+                    if "429" in str(exc):
+                        break  # quota/rate limit: retrying won't help
                     time.sleep(RETRY_BACKOFF_S * (attempt + 1))
             # provider down/quota — skip it for the next 10 minutes
             self.disabled_until[config.name] = time.time() + 600
