@@ -62,33 +62,37 @@ def clean_items(raw_items) -> list[dict]:
             out.append({"kind": kind, "qty": qty})
     return out
 
-SYSTEM_PROMPT = """You are the friendly intake assistant for Ousus, a steel \
-fabrication company. Conduct a short natural conversation to collect ALL of:
-- title: short project name
-- items: list of {"kind","qty"} — kind must be exactly one of:
-  railing(metres), mezzanine(m2), flight(count of straight flights),
-  gate_double(count), gate_single(count), security_door(count),
-  caged_ladder(count), support_frame(count), racking_bay(count),
-  canopy(m2), floor_plate_area(m2)
-- finish: paint colour / coating, or "none"
-- site: delivery or installation location
+SYSTEM_PROMPT = """You are the friendly custom-work assistant for Ousus, a \
+steel fabrication company. The client wants something CUSTOM made that is not \
+in the standard catalog. Conduct a short natural conversation to collect the \
+MINIMUM set of details an engineer needs to plan and quote it:
+
+REQUIRED (cannot submit without):
+- name: short item name
+- description: what it is + key dimensions/size (L x W x H, or area, or rise)
+- quantity: how many units
+- material_finish: mild steel / stainless / aluminium, and finish (paint RAL,
+  galvanised, polished...) — if unknown, suggest a sensible default and confirm
+
+OPTIONAL but ask once if not offered:
+- site: delivery/installation location
 - required_raw: deadline phrase copied verbatim (e.g. "within 6 weeks")
 
 RULES
 - One topic per message. Short, warm, professional.
-- If an answer is vague (e.g. "a fence for my yard"), map it to the closest
-  kind and confirm quantity with a concrete question ("roughly how many
-  metres?").
+- If the client's answer already contains several answers, accept them all —
+  never re-ask something they told you.
 - Never invent values. Never compute prices or dates.
-- When you have everything, summarise all fields in your reply and ask the
-  client to confirm. Only after they confirm, set complete=true.
+- When REQUIRED fields are collected, summarise everything in your reply and
+  ask the client to confirm submission. Only after they confirm, set
+  complete=true.
 
 OUTPUT — raw JSON only, nothing else:
 {"reply": "<your message>", "complete": false, "data": null}
 or on confirmation:
-{"reply": "...", "complete": true, "data": {"title": "...", "items":
- [{"kind": "...", "qty": 0}], "finish": "...", "site": "...",
-  "required_raw": "..."}}"""
+{"reply": "...", "complete": true, "data": {"name": "...",
+ "description": "...", "quantity": 1, "material_finish": "...",
+ "site": "...", "required_raw": "..."}}"""
 
 
 class MessageIn(BaseModel):
@@ -165,30 +169,60 @@ def message(session_id: int, body: MessageIn,
 
     if data.get("complete") and isinstance(data.get("data"), dict):
         d = data["data"]
-        items = clean_items(d.get("items"))
-        if not d.get("title") or not items:
+        # schema gate: the minimum an engineer needs to plan a custom build
+        missing = []
+        name = str(d.get("name") or "").strip()
+        desc = str(d.get("description") or "").strip()
+        qty = d.get("quantity")
+        try:
+            qty = float(qty)
+        except (TypeError, ValueError):
+            qty = 0
+        if not name:
+            missing.append("name")
+        if len(desc) < 5:
+            missing.append("description/dimensions")
+        if not qty or qty <= 0:
+            missing.append("quantity")
+        material = str(d.get("material_finish") or "").strip()
+        if not material:
+            d["material_finish"] = "mild steel, shop painted"
+        if missing:
             data["complete"] = False
-            data["reply"] = ("Before we finish — could you confirm the item "
-                             "type(s) and rough dimensions/quantities?")
+            data["reply"] = ("Before we submit — I still need: "
+                             + ", ".join(missing) + ". Could you fill those in?")
         else:
             code = next_spec_code(session)
+            structured = {
+                "items": [],
+                "custom": [{
+                    "name": name,
+                    "description": desc,
+                    "photo": (cs.collected_json or {}).get("photo", ""),
+                    "quantity": qty,
+                    "material_finish": d.get("material_finish"),
+                }],
+                "finish": d.get("material_finish") or "",
+                "site": d.get("site") or "",
+                "required_raw": d.get("required_raw") or "",
+            }
             spec = Spec(
                 code=code,
                 account_id=user.account_id,
-                title=str(d["title"])[:200],
-                raw_text=_render_raw(code, _as_request_body(d)),
-                structured_json={
-                    "items": items,
-                    "finish": d.get("finish") or "",
-                    "site": d.get("site") or "",
-                    "required_raw": d.get("required_raw") or "",
-                },
+                title=name[:200],
+                raw_text=(
+                    f"Project ID: {code}\nTitle: {name}\nDate: auto\n\n"
+                    f"Items: custom — {desc} x{qty:g} ({material})\n"
+                    f"Site: {structured['site'] or 'unstated'}\n"
+                    f"Required: {structured['required_raw'] or 'unstated'}\n"
+                ),
+                structured_json=structured,
                 source="chat_intake",
                 status="pending_review",
             )
             session.add(spec)
             cs.status = "submitted"
-            cs.collected_json = items
+            cs.collected_json = structured
             session.add(ChatMessage(
                 session_id=cs.id, role="assistant",
                 content=f"Submitted as request {spec.code}."))
@@ -232,3 +266,24 @@ def my_sessions(user: User = Depends(get_current_user),
     ).all()
     return [{"id": s.id, "status": s.status, "purpose": s.purpose}
             for s in sessions]
+
+
+class PhotoIn(BaseModel):
+    url: str
+
+
+@router.post("/{session_id}/photo")
+def attach_photo(session_id: int, body: PhotoIn,
+                 user: User = Depends(get_current_user),
+                 session: Session = Depends(get_session)):
+    """Client attached a reference photo; remembered for the submission."""
+    cs = session.get(ChatSession, session_id)
+    if not cs or cs.user_id != user.id:
+        raise HTTPException(404, "chat session not found")
+    if not body.url.startswith("/uploads/"):
+        raise HTTPException(422, "invalid upload url")
+    collected = dict(cs.collected_json or {})
+    collected["photo"] = body.url
+    cs.collected_json = collected
+    session.commit()
+    return {"ok": True}

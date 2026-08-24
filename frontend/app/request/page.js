@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { FileDown, Plus, Trash2, Upload } from "lucide-react";
+import { FileDown, MessageSquare, Plus, Trash2, Upload } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { api, getUser } from "../../lib/api";
 
@@ -20,6 +20,14 @@ function CatalogInner() {
   const [uploading, setUploading] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: "", description: "", photo: "" });
 
+  // custom-object chat (LLM agent; falls back to guided form)
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMsgs, setChatMsgs] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatDone, setChatDone] = useState(null);
+  const [chatSession, setChatSession] = useState(null);
+  const chatBoxRef = useRef(null);
   useEffect(() => {
     api("/products").then((d) => { setCatalog(d); setCatalogs(d.catalogs || []); }).catch((e) => setError(e.message));
   }, []);
@@ -86,6 +94,64 @@ function CatalogInner() {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
 
+
+  // ---- custom-object chat ----
+  useEffect(() => { chatBoxRef.current?.scrollTo(0, chatBoxRef.current.scrollHeight); }, [chatMsgs]);
+
+  function cPush(role, text) { setChatMsgs((m) => [...m, { role, text }]); }
+
+  async function startChat() {
+    setChatOpen(true); setChatBusy(true); setError("");
+    try {
+      const out = await api("/intake/start", { method: "POST" });
+      if (!out.llm) {
+        cPush("assistant",
+          "The smart assistant is offline right now. Please use the custom " +
+          "object form below (name + description + photo) instead.");
+        return;
+      }
+      setChatSession(out.session_id);
+      cPush("assistant", out.reply);
+    } catch (e) {
+      setError(e.message);
+    } finally { setChatBusy(false); }
+  }
+
+  async function sendChat() {
+    const text = chatInput.trim();
+    if (!text || chatBusy || !chatSession) return;
+    setChatInput(""); cPush("client", text); setChatBusy(true);
+    try {
+      const out = await api(`/intake/${chatSession}/message`, {
+        method: "POST", body: { text },
+      });
+      cPush("assistant", out.reply);
+      if (out.complete) setChatDone(out.code);
+    } catch (e) {
+      cPush("assistant", `Something went wrong: ${e.message}`);
+    } finally { setChatBusy(false); }
+  }
+
+  async function attachChatPhoto(file) {
+    if (!file || !chatSession) return;
+    setChatBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/uploads", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("ousus_token")}` },
+        body: fd,
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(typeof out.detail === "string" ? out.detail : "upload failed");
+      await api(`/intake/${chatSession}/photo`, { method: "POST", body: { url: out.url } });
+      cPush("assistant", "Reference photo attached — I'll include it with the request.");
+    } catch (e) {
+      cPush("assistant", `Upload failed: ${e.message}`);
+    } finally { setChatBusy(false); }
+  }
+
   if (doneCode) {
     return (
       <AppShell active="Services" title="Request submitted">
@@ -145,31 +211,85 @@ function CatalogInner() {
         ))}
 
       <section className="border border-primary/30 bg-card p-5">
-        <h2 className="font-mono text-sm font-bold text-foreground">Need something custom?</h2>
-        <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-          Describe it and attach a reference photo — engineers will plan it manually.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <input placeholder="Name (e.g. Spiral staircase)" value={customDraft.name}
-                 onChange={(e) => setCustomDraft({ ...customDraft, name: e.target.value })}
-                 className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
-          <label className="flex cursor-pointer items-center justify-center gap-2 border border-dashed border-border px-3 py-2.5 font-mono text-[11px] text-muted-foreground hover:border-primary">
-            <Upload className="size-3.5" />
-            {uploading ? "Uploading…" : customDraft.photo ? "Photo attached ✓" : "Attach reference photo"}
-            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
-                   onChange={(e) => uploadPhoto(e.target.files?.[0])} disabled={uploading} />
-          </label>
-          <textarea placeholder="Description — dimensions, material, anything useful"
-                    value={customDraft.description}
-                    onChange={(e) => setCustomDraft({ ...customDraft, description: e.target.value })}
-                    rows={2}
-                    className="sm:col-span-2 border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-mono text-sm font-bold text-foreground">Need something custom?</h2>
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+              Chat with our assistant — it asks exactly what an engineer needs,
+              then submits for review.
+            </p>
+          </div>
+          {!chatOpen && !chatDone && (
+            <button onClick={startChat} disabled={busy}
+                    className="flex shrink-0 items-center gap-2 bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90">
+              <MessageSquare className="size-3.5" /> Describe it to the assistant
+            </button>
+          )}
         </div>
-        <button disabled={!customDraft.name || uploading}
-                onClick={() => { setCustom([...custom, customDraft]); setCustomDraft({ name: "", description: "", photo: "" }); }}
-                className="mt-3 border border-primary/50 px-4 py-2 font-mono text-xs text-primary hover:bg-primary/10 disabled:opacity-40">
-          + Add custom object
-        </button>
+
+        {chatDone && (
+          <p className="mt-3 font-mono text-xs text-primary">
+            Custom request {chatDone} submitted — track it in <Link href="/my" className="underline">My Projects</Link>.
+          </p>
+        )}
+
+        {chatOpen && !chatDone && (
+          <div className="mt-4 border border-border">
+            <div ref={chatBoxRef} style={{ maxHeight: 320, overflowY: "auto", padding: 12 }}>
+              {chatMsgs.map((m, i) => (
+                <div key={i} className={`mb-2 flex ${m.role === "client" ? "justify-end" : "justify-start"}`}>
+                  <div style={{ whiteSpace: "pre-wrap" }}
+                       className={`max-w-[80%] rounded-lg px-3 py-2 font-mono text-xs leading-6 ${m.role === "client" ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"}`}>
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {chatBusy && <div className="font-mono text-[10px] text-muted-foreground">Thinking…</div>}
+            </div>
+            <div className="flex items-center gap-2 border-t border-border p-3">
+              <label className="cursor-pointer border border-border p-2.5 text-muted-foreground hover:border-primary hover:text-primary" title="Attach reference photo">
+                <Upload className="size-4" />
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
+                       onChange={(e) => attachChatPhoto(e.target.files?.[0])} disabled={chatBusy} />
+              </label>
+              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                     onKeyDown={(e) => e.key === "Enter" && sendChat()}
+                     placeholder="Type your answer…" disabled={chatBusy}
+                     className="flex-1 border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+              <button onClick={sendChat} disabled={chatBusy}
+                      className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">Send</button>
+            </div>
+          </div>
+        )}
+
+        {!chatOpen && !chatDone && (
+          <details className="mt-3">
+            <summary className="cursor-pointer font-mono text-[11px] text-muted-foreground hover:text-primary">
+              …or fill the custom object form manually
+            </summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <input placeholder="Name (e.g. Spiral staircase)" value={customDraft.name}
+                     onChange={(e) => setCustomDraft({ ...customDraft, name: e.target.value })}
+                     className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+              <label className="flex cursor-pointer items-center justify-center gap-2 border border-dashed border-border px-3 py-2.5 font-mono text-[11px] text-muted-foreground hover:border-primary">
+                <Upload className="size-3.5" />
+                {uploading ? "Uploading…" : customDraft.photo ? "Photo attached ✓" : "Attach reference photo"}
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
+                       onChange={(e) => uploadPhoto(e.target.files?.[0])} disabled={uploading} />
+              </label>
+              <textarea placeholder="Description — dimensions, material, anything useful"
+                        value={customDraft.description}
+                        onChange={(e) => setCustomDraft({ ...customDraft, description: e.target.value })}
+                        rows={2}
+                        className="sm:col-span-2 border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+            </div>
+            <button disabled={!customDraft.name || uploading}
+                    onClick={() => { setCustom([...custom, customDraft]); setCustomDraft({ name: "", description: "", photo: "" }); }}
+                    className="mt-3 border border-primary/50 px-4 py-2 font-mono text-xs text-primary hover:bg-primary/10 disabled:opacity-40">
+              + Add custom object to request
+            </button>
+          </details>
+        )}
       </section>
 
       <section className="border border-border bg-card p-5">
