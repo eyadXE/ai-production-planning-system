@@ -1,7 +1,16 @@
 """FastAPI application entrypoint.
 
 Run: .venv/bin/uvicorn finalproject.api.main:app --reload
+
+Reads .env from the project root if python-dotenv is available.
 """
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:  # pragma: no cover
+    pass
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

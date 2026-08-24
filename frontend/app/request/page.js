@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api, getUser } from "../../lib/api";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 
 const ITEM_TYPES = [
   ["railing", "Railing / balustrade (metres)"],
@@ -19,7 +19,7 @@ const ITEM_TYPES = [
   ["floor_plate_area", "Floor plate area (m²)"],
 ];
 
-export default function RequestChat() {
+function ChatInner() {
   const user = getUser();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -27,19 +27,19 @@ export default function RequestChat() {
   const [done, setDone] = useState(null);
   const [busy, setBusy] = useState(false);
   const boxRef = useRef(null);
+  const answers = useRef({});
 
   const steps = [
-    { key: "title", q: "Hi! I'm the Ousus assistant. In a few words, what would you like us to build? (e.g. 'Villa gate and fence rail')" },
+    { key: "title", q: "Hi! I'm the Ousus assistant. What would you like us to build?" },
     { key: "kind", q: "Great. What type of item is it?", options: ITEM_TYPES },
     { key: "qty", q: "How much/many? Enter just the number." },
-    { key: "finish", q: "Any finish preference? (e.g. shop paint RAL 7016, galvanised, or 'none')" },
-    { key: "site", q: "Where should it be delivered/installed?" },
-    { key: "required_raw", q: "When do you need it? (e.g. 'within 6 weeks' or a date)" },
-    { key: "confirm", q: "" },
+    { key: "finish", q: "Any finish preference? (e.g. shop paint RAL 7016, galvanised — or 'none')" },
+    { key: "site", q: "Where should it be delivered/installed? ('-' to skip)" },
+    { key: "required_raw", q: "When do you need it? (e.g. 'within 6 weeks')" },
   ];
 
   useEffect(() => {
-    if (user !== null && step === 0 && messages.length === 0) {
+    if (user && messages.length === 0) {
       push("assistant", steps[0].q);
       setStep(1);
     }
@@ -47,22 +47,17 @@ export default function RequestChat() {
 
   useEffect(() => { boxRef.current?.scrollTo(0, boxRef.current.scrollHeight); }, [messages]);
 
-  function push(role, text) {
-    setMessages((m) => [...m, { role, text }]);
-  }
-
-  const answers = useRef({});
+  function push(role, text) { setMessages((m) => [...m, { role, text }]); }
 
   async function submit() {
     const value = input.trim();
     if (!value) return;
     setInput("");
 
-    if (step === steps.length) { // summary confirmation
+    if (step === steps.length + 1) {
       if (value.toLowerCase().startsWith("y")) return doSubmit();
       push("assistant", "No problem — let's start over. What would you like to build?");
-      answers.current = {};
-      setStep(1);
+      answers.current = {}; setStep(1);
       return;
     }
     const key = steps[step - 1].key;
@@ -72,33 +67,24 @@ export default function RequestChat() {
     if (key === "qty") {
       const n = parseFloat(value);
       if (!n || n <= 0) {
-        push("assistant", "That doesn't look like a valid quantity — please enter a number greater than 0.");
+        push("assistant", "Please enter a number greater than 0.");
         return;
       }
     }
-    if (key === "finish" && ["unstated", "", "no"].includes(value.toLowerCase())) {
-      answers.current.finish = "";
-    }
-    if (key === "site") answers.current.site = value === "-" ? "" : value;
+    if (key === "finish" && ["unstated", "", "no"].includes(value.toLowerCase())) answers.current.finish = "";
+    if (key === "site" && value === "-") answers.current.site = "";
 
-    const nextQ = steps[step]?.q;
-    if (step + 1 === steps.length) { // reached confirm
+    if (step === steps.length) {
       const a = answers.current;
       push("assistant",
-        `Here is your request:\n\n` +
-        `• ${a.title}\n` +
-        `• ${ITEM_TYPES.find(([k]) => k === a.kind)?.[1] ?? a.kind}: ${a.qty}\n` +
-        `• Finish: ${a.finish || "none specified"}\n` +
-        `• Site: ${a.site || "to be confirmed"}\n` +
-        `• Required: ${a.required_raw}\n\n` +
-        `Type YES to submit for engineering review, or anything else to start over.`);
-      setStep(steps.length);
-      setInput("");
+        `Here is your request:\n\n• ${a.title}\n• ${ITEM_TYPES.find(([k]) => k === a.kind)?.[1] ?? a.kind}: ${a.qty}\n` +
+        `• Finish: ${a.finish || "none specified"}\n• Site: ${a.site || "to be confirmed"}\n• Required: ${a.required_raw}\n\n` +
+        `Type YES to submit for engineering review.`);
+      setStep(steps.length + 1);
       return;
     }
-    push("assistant", nextQ);
+    push("assistant", steps[step].q);
     setStep(step + 1);
-    setInput("");
   }
 
   async function doSubmit() {
@@ -110,83 +96,70 @@ export default function RequestChat() {
         body: {
           title: a.title,
           items: [{ kind: a.kind, qty: parseFloat(a.qty), note: "" }],
-          finish: a.finish,
-          site: a.site,
-          required_raw: a.required_raw,
+          finish: a.finish, site: a.site, required_raw: a.required_raw,
         },
       });
       push("assistant",
-        `Submitted as request ${out.code}. An engineer will review it — ` +
-        `you'll get an email when it moves forward. Track it under My Projects.`);
+        `Submitted as request ${out.code}. An engineer will review it — you'll get an email when it moves forward.`);
       setDone(out.code);
     } catch (e) {
       push("assistant", `Sorry, something went wrong: ${e.message}`);
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
-  if (getUser() === null) {
+  if (!user || user.role !== "client") {
     return (
-      <>
-        <Nav />
-        <div className="container">
-          <div className="card" style={{ maxWidth: 480, margin: "60px auto", textAlign: "center" }}>
-            <h3>Tell us what you need</h3>
-            <p style={{ color: "var(--muted)", lineHeight: 1.7 }}>
-              Create a free client account first — then our assistant will walk
-              you through your request in under two minutes.
-            </p>
-            <Link className="btn" href="/login?mode=signup">Create account</Link>
-          </div>
+      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="max-w-md border border-border bg-card p-8 text-center">
+          <h3 className="font-mono text-sm font-bold text-foreground">Tell us what you need</h3>
+          <p className="mt-3 font-mono text-xs leading-6 text-muted-foreground">
+            Create a free client account first — the assistant walks you
+            through your request in under two minutes.
+          </p>
+          <Link href="/login?mode=signup" className="mt-5 inline-block bg-primary px-5 py-3 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90">
+            Create account
+          </Link>
         </div>
-      </>
-    );
-  }
-  if (user?.role !== "client") {
-    return (
-      <>
-        <Nav />
-        <div className="container"><div className="card">The intake chat is for client accounts.</div></div>
-      </>
+      </div>
     );
   }
 
   return (
-    <>
-      <Nav />
-      <div className="container" style={{ maxWidth: 720 }}>
-        <h1>Request a service</h1>
-        <div className="card" style={{ padding: 0 }}>
-          <div ref={boxRef} style={{ maxHeight: 420, overflowY: "auto", padding: 16 }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{
-                display: "flex",
-                justifyContent: m.role === "client" ? "flex-end" : "flex-start",
-                marginBottom: 8,
-              }}>
-                <div style={{
-                  background: m.role === "client" ? "var(--accent)" : "var(--border)",
-                  color: m.role === "client" ? "#fff" : "var(--text)",
-                  borderRadius: 10, padding: "8px 12px",
-                  whiteSpace: "pre-wrap", maxWidth: "80%", lineHeight: 1.5,
-                }}>{m.text}</div>
+    <AppShell active="New request" title="Request a service"
+              subtitle="Our assistant collects everything we need — no forms.">
+      <div className="border border-border bg-card" style={{ padding: 0 }}>
+        <div ref={boxRef} style={{ maxHeight: 440, overflowY: "auto", padding: 16 }}>
+          {messages.map((m, i) => (
+            <div key={i} className={`mb-2 flex ${m.role === "client" ? "justify-end" : "justify-start"}`}>
+              <div style={{ whiteSpace: "pre-wrap" }}
+                   className={`max-w-[80%] rounded-lg px-3 py-2 font-mono text-xs leading-6 ${m.role === "client" ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"}`}>
+                {m.text}
               </div>
-            ))}
-            {busy && <div style={{ color: "var(--muted)" }}>Sending…</div>}
-          </div>
-          {!done && (
-            <div style={{ display: "flex", gap: 8, borderTop: "1px solid var(--border)", padding: 12 }}>
-              <input value={input} onChange={(e) => setInput(e.target.value)}
-                     onKeyDown={(e) => e.key === "Enter" && submit()}
-                     placeholder={step >= steps.length ? "Type YES to confirm…" : "Type your answer…"}
-                     disabled={busy} />
-              <button className="btn" onClick={submit} disabled={busy}>Send</button>
             </div>
-          )}
+          ))}
+          {busy && <div className="font-mono text-[10px] text-muted-foreground">Sending…</div>}
         </div>
-        {done && <p className="success">Request {done} submitted. Check <Link href="/my" style={{ color: "var(--accent)" }}>My Projects</Link> for progress.</p>}
+        {!done && (
+          <div className="flex gap-2 border-t border-border p-3">
+            <input value={input} onChange={(e) => setInput(e.target.value)}
+                   onKeyDown={(e) => e.key === "Enter" && submit()}
+                   placeholder={step > steps.length ? "Type YES to confirm…" : "Type your answer…"}
+                   disabled={busy}
+                   className="flex-1 border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+            <button className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    onClick={submit} disabled={busy}>Send</button>
+          </div>
+        )}
       </div>
-    </>
+      {done && (
+        <p className="font-mono text-xs text-primary">
+          Request {done} submitted. Track progress in <Link href="/my" className="underline">My Projects</Link>.
+        </p>
+      )}
+    </AppShell>
   );
+}
+
+export default function RequestChat() {
+  return <ChatInner />;
 }

@@ -1,7 +1,9 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Factory } from "lucide-react";
 import { api, setSession } from "../../lib/api";
 
 function LoginInner() {
@@ -23,8 +25,7 @@ function LoginInner() {
 
   async function submit(e) {
     e.preventDefault();
-    setError("");
-    setBusy(true);
+    setError(""); setBusy(true);
     try {
       const path = mode === "login" ? "/auth/login" : "/auth/signup";
       const body = mode === "login"
@@ -40,71 +41,87 @@ function LoginInner() {
       setSession(out.access_token, out.user);
       router.push(out.user.role === "client"
         ? (mode === "signup" ? "/request" : "/my")
-        : "/board");
+        : "/summary");
     } catch (err) {
       setError(err.message);
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
   return (
-    <div style={{ maxWidth: 400, margin: "80px auto" }}>
-      <div className="card">
-        <h1>{mode === "login" ? "Sign in to Ousus" : "Create a client account"}</h1>
-        <form onSubmit={submit}>
-          <label>Email</label>
-          <input type="email" value={form.email} onChange={set("email")} required />
-          <label>Password</label>
-          <input type="password" value={form.password} onChange={set("password")}
-                 minLength={8} required />
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-md border border-border bg-card p-8">
+        <div className="flex items-center gap-3">
+          <div className="grid size-9 place-items-center bg-primary text-primary-foreground">
+            <Factory className="size-4" />
+          </div>
+          <div>
+            <p className="font-mono text-base font-bold tracking-tight text-foreground">OUSUS</p>
+            <p className="font-mono text-[9px] uppercase tracking-[0.24em] text-muted-foreground">Operations OS</p>
+          </div>
+        </div>
+
+        <h1 className="mt-6 font-mono text-xl font-bold text-foreground">
+          {mode === "login" ? "Sign in" : "Create a client account"}
+        </h1>
+        <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
+          <div>
+            <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Email</label>
+            <input type="email" value={form.email} onChange={set("email")} required
+                   className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+          </div>
+          <div>
+            <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Password</label>
+            <input type="password" minLength={8} value={form.password} onChange={set("password")} required
+                   className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+          </div>
           {mode === "signup" && (
             <>
-              <label>Full name</label>
-              <input value={form.full_name} onChange={set("full_name")} required />
-              <label>Company name <span style={{ opacity: .6 }}>(new customers)</span></label>
-              <input placeholder="Leave blank to use your name"
-                     value={form.company_name} onChange={set("company_name")} />
-              <label>Existing account code <span style={{ opacity: .6 }}>(if your company already works with Ousus)</span></label>
-              <input placeholder="e.g. AC-01 (optional)"
-                     value={form.account_code} onChange={set("account_code")} />
-              <p className="meta" style={{ color: "var(--muted)", fontSize: 12 }}>
-                New here? Just use your name — we create your account
-                automatically. Staff sign-in is admin-provisioned.
-              </p>
+              <div>
+                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Full name</label>
+                <input value={form.full_name} onChange={set("full_name")} required
+                       className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+              </div>
+              <div>
+                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Company name (new customers)</label>
+                <input placeholder="Leave blank to use your name" value={form.company_name} onChange={set("company_name")}
+                       className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+              </div>
+              <div>
+                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Existing account code (optional)</label>
+                <input placeholder="e.g. AC-01" value={form.account_code} onChange={set("account_code")}
+                       className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+                <p className="mt-2 font-mono text-[10px] leading-5 text-muted-foreground">
+                  New here? Just use your name — we create your account automatically.
+                  Staff sign-in is admin-provisioned.
+                </p>
+              </div>
             </>
           )}
-          <div style={{ marginTop: 18 }}>
-            <button className="btn" disabled={busy} style={{ width: "100%" }}>
-              {busy ? "…" : mode === "login" ? "Sign in" : "Create account & start request"}
-            </button>
-          </div>
+          <button disabled={busy}
+                  className="bg-primary px-4 py-3 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+            {busy ? "…" : mode === "login" ? "Sign in" : "Create account & start request"}
+          </button>
         </form>
-        {error && <div className="error">{error}</div>}
-        <p style={{ marginTop: 16, color: "var(--muted)" }}>
+        {error && <p className="mt-3 font-mono text-xs text-destructive">{error}</p>}
+        <p className="mt-5 font-mono text-xs text-muted-foreground">
           {mode === "login" ? "New customer?" : "Have an account?"}{" "}
-          <a href="#" onClick={(e) => {
-            e.preventDefault();
-            setError("");
-            setMode(mode === "login" ? "signup" : "login");
-          }} style={{ color: "var(--accent)" }}>
+          <a href="#" onClick={(e) => { e.preventDefault(); setError(""); setMode(mode === "login" ? "signup" : "login"); }}
+             className="text-primary hover:underline">
             {mode === "login" ? "Create an account" : "Sign in"}
           </a>
         </p>
-        <p className="meta" style={{ color: "var(--muted)", fontSize: 12 }}>
-          Demo staff: manager@oususapp.com / engineer@oususapp.com / client@oususapp.com — password demo1234
+        <p className="mt-4 border-t border-border pt-4 font-mono text-[10px] leading-5 text-muted-foreground">
+          Demo staff: manager@ / engineer@ / client@oususapp.com — password demo1234
         </p>
       </div>
     </div>
   );
 }
 
-function LoginPage() {
+export default function LoginPage() {
   return (
     <Suspense fallback={null}>
       <LoginInner />
     </Suspense>
   );
 }
-
-export default LoginPage;

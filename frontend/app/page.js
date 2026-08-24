@@ -2,94 +2,104 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ArrowRight, Factory } from "lucide-react";
 import { getUser } from "../lib/api";
 
 const SERVICES = [
-  { name: "Mezzanine decks", desc: "Structural steel decks with chequer-plate flooring, edge protection included." },
-  { name: "Staircases", desc: "Straight flights with landings, balustrades measured separately." },
-  { name: "Railings & balustrades", desc: "SHS posts with flat-bar infill, any run length, shop painted any RAL." },
-  { name: "Gates & doors", desc: "Single/double swing or sliding gates, mesh or plate infill, security doors." },
-  { name: "Access ladders", desc: "Caged access ladders for plant and fire-escape routes." },
-  { name: "Racking", desc: "Heavy-duty storage racking, priced per bay." },
-  { name: "Canopies", desc: "Entrance canopies with RHS frames and plate soffits." },
-  { name: "Support frames", desc: "Machine support and press-line framing." },
+  ["Mezzanine decks", "Structural steel decks with chequer-plate flooring, edge protection included."],
+  ["Staircases", "Straight flights with landings; balustrades measured separately."],
+  ["Railings & balustrades", "SHS posts with flat-bar infill, any run length, painted any RAL."],
+  ["Gates & doors", "Swing or sliding gates with mesh/plate infill; security doors."],
+  ["Access ladders", "Caged ladders for plant and fire-escape routes."],
+  ["Racking", "Heavy-duty storage racking, priced per bay."],
+  ["Canopies", "Entrance canopies with RHS frames and plate soffits."],
+  ["Support frames", "Machine support and press-line framing."],
 ];
 
 const STEPS = [
-  ["1. Request", "Tell our assistant what you need — it walks you through every detail."],
-  ["2. Engineering review", "An Ousus engineer checks the request before anything is planned."],
-  ["3. Plan & schedule", "We compute materials, hours, price and a realistic completion date."],
-  ["4. Manager release", "Nothing starts until management signs off — your guarantee of control."],
-  ["5. Build & install", "Track your project stage by stage; get email updates at every milestone."],
+  ["01 · Request", "Tell our assistant what you need — it collects every detail."],
+  ["02 · Engineering review", "An Ousus engineer checks the request before planning."],
+  ["03 · Plan & schedule", "Materials, hours, price and a realistic completion date."],
+  ["04 · Manager release", "Nothing starts without management sign-off."],
+  ["05 · Build & install", "Track your project stage by stage, with email updates."],
 ];
 
 export default function Landing() {
   const [user, setUser] = useState(null);
   useEffect(() => setUser(getUser()), []);
 
-  const ctaHref = user ? (user.role === "client" ? "/request" : "/board") : "/login";
+  const appHref = user ? (user.role === "client" ? "/my" : "/summary") : "/login";
 
   return (
-    <div>
-      <nav className="nav">
-        <span className="brand">Ousus</span>
-        <span className="spacer" />
-        {user ? (
-          <>
-            <Link className="link active" href={ctaHref}>Open app</Link>
-          </>
-        ) : (
-          <>
-            <Link className="link" href="/login">Sign in</Link>
-            <Link className="btn" href="/login?mode=signup">Create account</Link>
-          </>
-        )}
+    <div className="min-h-screen bg-background text-foreground">
+      <nav className="flex items-center justify-between border-b border-border px-6 py-4 sm:px-10">
+        <div className="flex items-center gap-3">
+          <div className="grid size-8 place-items-center bg-primary text-primary-foreground"><Factory className="size-4" /></div>
+          <p className="font-mono text-base font-bold tracking-tight">OUSUS</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {user ? (
+            <Link href={appHref} className="bg-primary px-4 py-2 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90">Open app</Link>
+          ) : (
+            <>
+              <Link href="/login" className="font-mono text-xs text-muted-foreground hover:text-foreground">Sign in</Link>
+              <Link href="/login?mode=signup" className="bg-primary px-4 py-2 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90">Create account</Link>
+            </>
+          )}
+        </div>
       </nav>
 
-      <div className="container">
-        <div style={{ textAlign: "center", padding: "50px 0 40px" }}>
-          <h1 style={{ fontSize: 34 }}>
-            Steel fabrication,<br />planned with discipline.
-          </h1>
-          <p style={{ color: "var(--muted)", maxWidth: 560, margin: "14px auto 24px", lineHeight: 1.7 }}>
-            Ousus turns your written request into a full production plan —
-            materials, labour, price and a realistic schedule — reviewed by
-            engineers and released only with management sign-off.
-          </p>
-          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-            <Link className="btn" href="/request">Request a service</Link>
-            {!user && <Link className="btn secondary" href="/login">Client sign in</Link>}
-          </div>
+      <section className="mx-auto max-w-[1440px] px-6 py-20 text-center sm:px-10">
+        <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Steel fabrication · planned with discipline</p>
+        <h1 className="mx-auto mt-4 max-w-2xl font-mono text-3xl font-bold leading-tight tracking-tight sm:text-5xl">
+          Your request in. A production plan out.
+        </h1>
+        <p className="mx-auto mt-5 max-w-xl font-mono text-xs leading-6 text-muted-foreground">
+          Ousus turns a written description into a complete plan — materials,
+          labour hours, price and a realistic schedule — reviewed by engineers
+          and released only with management sign-off.
+        </p>
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <Link href="/request" className="flex items-center gap-2 bg-primary px-5 py-3 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90">
+            Request a service <ArrowRight className="size-4" />
+          </Link>
+          {!user && (
+            <Link href="/login" className="border border-border px-5 py-3 font-mono text-xs text-muted-foreground hover:border-primary hover:text-primary">
+              Client sign in
+            </Link>
+          )}
         </div>
+      </section>
 
-        <h3>What we fabricate</h3>
-        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", marginBottom: 36 }}>
-          {SERVICES.map((s) => (
-            <div key={s.name} className="card">
-              <b>{s.name}</b>
-              <div style={{ color: "var(--muted)", marginTop: 6, lineHeight: 1.6 }}>{s.desc}</div>
+      <section className="mx-auto max-w-[1440px] px-6 pb-16 sm:px-10">
+        <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">What we fabricate</p>
+        <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+          {SERVICES.map(([name, desc]) => (
+            <div key={name} className="bg-card p-5">
+              <b className="font-mono text-xs text-foreground">{name}</b>
+              <p className="mt-2 font-mono text-[11px] leading-5 text-muted-foreground">{desc}</p>
             </div>
           ))}
         </div>
+      </section>
 
-        <h3>How it works</h3>
-        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 40 }}>
+      <section className="mx-auto max-w-[1440px] px-6 pb-24 sm:px-10">
+        <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">How it works</p>
+        <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-5">
           {STEPS.map(([t, d]) => (
-            <div key={t} className="card">
-              <b>{t}</b>
-              <div style={{ color: "var(--muted)", marginTop: 6, lineHeight: 1.6 }}>{d}</div>
+            <div key={t} className="bg-card p-5">
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">{t}</p>
+              <p className="mt-2 font-mono text-[11px] leading-5 text-muted-foreground">{d}</p>
             </div>
           ))}
         </div>
+      </section>
 
-        <div className="card" style={{ textAlign: "center", padding: 30 }}>
-          <b style={{ fontSize: 16 }}>Ready to start?</b>
-          <p style={{ color: "var(--muted)" }}>
-            Chat with our assistant — it collects everything we need in minutes.
-          </p>
-          <Link className="btn" href="/request">Request a service</Link>
-        </div>
-      </div>
+      <footer className="border-t border-border px-6 py-8 text-center sm:px-10">
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+          Ousus Production Platform — people stay in control of what reaches the workshop floor.
+        </p>
+      </footer>
     </div>
   );
 }

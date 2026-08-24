@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ShieldCheck } from "lucide-react";
+import AppShell from "../../components/AppShell";
 import { api } from "../../lib/api";
-import Nav from "../../components/Nav";
 
 export default function Approvals() {
   const [items, setItems] = useState([]);
@@ -15,82 +16,78 @@ export default function Approvals() {
     try {
       setItems(await api("/approvals"));
       setAudit(await api("/audit"));
-    } catch (e) {
-      setError(e.message);
-    }
+    } catch (e) { setError(e.message); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
   async function decide(id, approved) {
-    setBusy(String(id));
-    setError("");
+    setBusy(String(id)); setError("");
     try {
-      await api(`/approvals/${id}/decision`, {
-        method: "POST",
-        body: { approved, note },
-      });
-      setNote("");
-      await load();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy("");
-    }
+      await api(`/approvals/${id}/decision`, { method: "POST", body: { approved, note } });
+      setNote(""); await load();
+    } catch (e) { setError(e.message); } finally { setBusy(""); }
   }
 
   return (
-    <>
-      <Nav />
-      <div className="container">
-        <h1>Approval Queue — the Release Gate</h1>
-        <p style={{ color: "var(--muted)" }}>
-          Nothing is released to fabrication and no material is ordered until
-          you approve it here (clause 0.2).
-        </p>
-        {error && <div className="error">{error}</div>}
+    <AppShell active="Approvals" title="Approval queue — the release gate"
+              subtitle="Nothing is released to fabrication and no material is ordered until you approve it here (clause 0.2).">
+      {error && <div className="text-destructive">{error}</div>}
 
-        {items.length === 0 && <div className="card">Queue is empty.</div>}
-        {items.map((a) => (
-          <div key={a.id} className="card" style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <b>#{a.id} · {a.type.replace("_", " ")}</b>
-                <div className="meta" style={{ color: "var(--muted)", marginTop: 4 }}>{a.note}</div>
+      <section>
+        <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+          Pending · {items.length}</p>
+        {items.length === 0 && (
+          <div className="border border-border bg-card p-5 font-mono text-xs text-muted-foreground">Queue is empty.</div>
+        )}
+        <div className="flex flex-col gap-3">
+          {items.map((a) => (
+            <div key={a.id} className="border border-border bg-card p-5">
+              <b className="font-mono text-xs text-foreground">#{a.id} · {a.type.replace("_", " ")}</b>
+              <p className="mt-1 font-mono text-[10px] text-muted-foreground">{a.note}</p>
+              <label className="mt-3 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Decision note</label>
+              <input value={note} onChange={(e) => setNote(e.target.value)}
+                     placeholder="materials verified, capacity confirmed…"
+                     className="mt-1 w-full border border-border bg-background px-3 py-2 font-mono text-xs text-foreground" />
+              <div className="mt-3 flex gap-2">
+                <button disabled={busy === String(a.id)} onClick={() => decide(a.id, true)}
+                        className="bg-primary px-4 py-2 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                  Approve &amp; release
+                </button>
+                <button disabled={busy === String(a.id)} onClick={() => decide(a.id, false)}
+                        className="border border-destructive/40 px-4 py-2 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">
+                  Reject
+                </button>
               </div>
             </div>
-            <label>Decision note (optional)</label>
-            <input value={note} onChange={(e) => setNote(e.target.value)}
-                   placeholder="e.g. materials verified, capacity confirmed" />
-            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-              <button className="btn green" disabled={busy === String(a.id)}
-                      onClick={() => decide(a.id, true)}>Approve &amp; release</button>
-              <button className="btn red" disabled={busy === String(a.id)}
-                      onClick={() => decide(a.id, false)}>Reject</button>
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
+      </section>
 
-        <h1 style={{ marginTop: 30 }}>Audit Trail</h1>
-        <div className="card">
-          <table>
-            <thead>
-              <tr><th>#</th><th>Type</th><th>Decision</th><th>Approver</th><th>When</th><th>Note</th></tr>
-            </thead>
+      <section>
+        <p className="mb-3 mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+          <ShieldCheck className="size-3.5" /> Audit trail</p>
+        <div className="overflow-x-auto border border-border bg-card">
+          <table className="w-full border-collapse">
+            <thead><tr className="border-b border-border">
+              {["#", "Type", "Decision", "Approver ID", "When (UTC)", "Note"].map((h) => (
+                <th key={h} className="px-4 py-3 text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{h}</th>))}
+            </tr></thead>
             <tbody>
               {audit.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.id}</td><td>{a.type}</td>
-                  <td>{a.decision}</td>
-                  <td>{a.approver_id || "—"}</td>
-                  <td>{(a.at || "").replace("T", " ").slice(0, 19)}</td>
-                  <td>{a.note}</td>
+                <tr key={a.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-3 font-mono text-xs text-foreground">{a.id}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{a.type}</td>
+                  <td className={`px-4 py-3 font-mono text-xs ${a.decision === "approved" ? "text-primary" : a.decision === "rejected" ? "text-destructive" : "text-muted-foreground"}`}>{a.decision}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{a.approver_id || "—"}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{(a.at || "").replace("T", " ").slice(0, 19)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{a.note}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
-    </>
+      </section>
+    </AppShell>
   );
 }
