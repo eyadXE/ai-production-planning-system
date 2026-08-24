@@ -1,9 +1,11 @@
 """Client intake requests + engineer review + manager deletion."""
 
 import re
+import uuid
 from datetime import date
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +20,9 @@ from finalproject.tracking.notify import send_email
 
 router = APIRouter(tags=["intake"])
 
+UPLOAD_DIR = Path("data/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 VALID_ITEM_KINDS = {
     "railing", "mezzanine", "flight", "gate_double", "gate_single",
     "security_door", "caged_ladder", "support_frame", "racking_bay",
@@ -31,12 +36,45 @@ class RequestItem(BaseModel):
     note: str = ""
 
 
+class CustomItem(BaseModel):
+    name: str
+    description: str = ""
+    photo: str = ""          # /uploads/xx.png from the upload endpoint
+
+
 class RequestIn(BaseModel):
     title: str
-    items: list[RequestItem]
+    items: list[RequestItem] = []
+    custom: list[CustomItem] = []
     finish: str = ""
     site: str = ""
     required_raw: str
+
+
+@router.get("/products")
+def list_products(category: str | None = None):
+    """Public catalog — no login needed to browse."""
+    from finalproject.db.database import SessionLocal
+    from finalproject.db.models import Product
+
+    with SessionLocal() as s:
+        q = select(Product).order_by(Product.category, Product.id)
+        rows = s.scalars(q).all()
+        if category:
+            rows = [r for r in rows if r.category == category]
+        cats = sorted({r.category for r in rows})
+        from finalproject.db.products_data import CATALOGUES
+
+        return {
+            "catalogs": [{"title": t, "url": u} for t, u in CATALOGUES],
+            "categories": cats,
+            "products": [
+                {"id": r.id, "category": r.category, "name": r.name,
+                 "description": r.description, "image": r.image,
+                 "est_kind": r.est_kind, "unit": r.unit}
+                for r in rows
+            ],
+        }
 
 
 def next_spec_code(session: Session) -> str:
@@ -49,16 +87,19 @@ def next_spec_code(session: Session) -> str:
 def submit_request(body: RequestIn,
                    user: User = Depends(get_current_user),
                    session: Session = Depends(get_session)):
-    """Client submits an intake-chat request -> waits for engineer review."""
+    """Client submits a cart/custom request -> waits for engineer review."""
     if not user.account_id:
         raise HTTPException(403, "client accounts only")
     bad = [i.kind for i in body.items if i.kind not in VALID_ITEM_KINDS]
     if bad:
         raise HTTPException(422, f"unknown item kinds: {bad}")
+    if not body.items and not body.custom:
+        raise HTTPException(422, "request is empty — add catalog items or a custom object")
 
     code = next_spec_code(session)
     structured = {
         "items": [i.model_dump() for i in body.items],
+        "custom": [c.model_dump() for c in body.custom],
         "finish": body.finish or None,
         "site": body.site or None,
         "required_raw": body.required_raw,
@@ -77,6 +118,22 @@ def submit_request(body: RequestIn,
     return {"code": spec.code, "status": spec.status,
             "message": ("Request submitted — an engineer will review it and "
                         "you will be notified.")}
+
+
+@router.post("/uploads")
+async def upload_photo(file: UploadFile = File(...),
+                       user: User = Depends(get_current_user)):
+    """Custom-object reference photos. Saved under data/uploads, served at /uploads/<name>."""
+    ext = Path(file.filename or "photo.png").suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(422, "only png/jpg/webp images are allowed")
+    name = f"{uuid.uuid4().hex[:12]}{ext}"
+    dest = UPLOAD_DIR / name
+    dest.write_bytes(await file.read())
+    return {"url": f"/uploads/{name}"}
+
+
+
 
 
 def _render_raw(code: str, body: RequestIn) -> str:
@@ -134,19 +191,22 @@ def review_request(code: str, approve: bool,
     spec.status = "approved"
     spec.reviewed_by = user.id
 
+    structured = spec.structured_json or {}
+    custom = structured.get("custom") or []
+
     # planning phase — same deterministic pipeline as file specs
     parsed = parse_spec(spec.raw_text)
     parsed.account_id = _account_code(session, spec.account_id)
     # merge chat-structured items so nothing depends on raw-text parsing
-    if spec.structured_json:
+    if structured:
         from finalproject.engine.parser import Item
 
         parsed.items = [
             Item(i["kind"], float(i["qty"]), i.get("note", ""))
-            for i in spec.structured_json["items"]
+            for i in structured.get("items") or []
         ]
-        parsed.finish = spec.structured_json.get("finish") or ""
-        parsed.site = spec.structured_json.get("site") or ""
+        parsed.finish = structured.get("finish") or ""
+        parsed.site = structured.get("site") or ""
         deadline = parse_spec(spec.raw_text).deadline  # via Required line
         if spec.structured_json.get("required_raw"):
             base = parsed.spec_date or date.today()
@@ -155,14 +215,30 @@ def review_request(code: str, approve: bool,
             d = parse_deadline(spec.structured_json["required_raw"], base)
             parsed.deadline = d or parsed.deadline
         missing = []
-        if not parsed.items:
+        if not parsed.items and not custom:
             missing.append("item dimensions/quantities")
         fin = parsed.finish.lower().strip(" .")
         if not fin or fin == "unstated":
-            missing.append("finish")
-        if parsed.deadline is None:
+            if not custom:      # custom objects carry their own description
+                missing.append("finish")
+        if parsed.deadline is None and not custom:
             missing.append("required date")
         parsed.missing = missing
+
+    # Custom-only requests can't be auto-estimated by the rate handbook —
+    # they go straight to the board for manual engineering planning.
+    if structured.get("custom") and not structured.get("items"):
+        spec.project_ref = _create_project_from_spec(session, spec)
+        if account_has_client(session, spec.account_id):
+            send_email(session, spec.account_id, "spec_approved",
+                       {"code": spec.code, "title": spec.title})
+        return {
+            "code": spec.code, "status": spec.status,
+            "decision": "MANUAL_PLAN",
+            "reasons": ["Contains custom object(s) — routed to engineers "
+                        "for a manual plan (rate handbook does not apply)."],
+            "project": spec.project_ref,
+        }
 
     result = run_estimate(session, spec.raw_text, parsed)
 
@@ -222,6 +298,26 @@ def _account_code(session: Session, account_id: int) -> str:
 
     acc = session.get(Account, account_id)
     return acc.code if acc else "AC-01"
+
+
+def _create_project_from_spec(session: Session, spec) -> str:
+    """Custom-only request -> board project awaiting manual planning."""
+    existing = session.scalar(select(Project).where(Project.code == spec.code))
+    if existing:
+        return existing.code
+    p = Project(
+        code=spec.code,
+        account_id=spec.account_id,
+        spec_id=spec.id,
+        title=spec.title or spec.code,
+        stage="Production Planning",
+        status="on_track",
+        release_status="na",
+        required_date=None,
+    )
+    session.add(p)
+    session.commit()
+    return p.code
 
 
 def account_has_client(session: Session, account_id: int) -> bool:

@@ -170,6 +170,12 @@ def load_fx_rates(session) -> None:
         session.add(FxRate(currency=cur, egp_per_unit=rate))
 
 
+def load_products(session) -> int:
+    from finalproject.db.products_data import seed_products
+
+    return seed_products(session)
+
+
 def create_demo_users(session, account_ids: dict[str, int]) -> None:
     users = [
         User(email="manager@oususapp.com", full_name="Production Manager",
@@ -201,6 +207,7 @@ def seed(fresh: bool = False) -> None:
         load_projects(session, account_ids, spec_ids)
         clauses = load_handbook(session)
         load_fx_rates(session)
+        products = load_products(session)
         create_demo_users(session, account_ids)
         session.commit()
 
@@ -211,7 +218,8 @@ def seed(fresh: bool = False) -> None:
             f"weeks={len(session.scalars(select(CapacityWeek)).all())} "
             f"specs={len(spec_ids)} "
             f"projects={len(session.scalars(select(Project)).all())} "
-            f"clauses={clauses}"
+            f"clauses={clauses} "
+            f"products={products}"
         )
 
 

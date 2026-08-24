@@ -22,6 +22,17 @@ from finalproject.api.intake_routes import router as intake_router
 from finalproject.db.database import init_db
 
 app = FastAPI(title="Ousus Production Platform", version="0.1.0")
+
+# uploaded custom-object photos & product catalogue PDFs
+from pathlib import Path
+
+from fastapi.staticfiles import StaticFiles
+
+(Path("data/uploads")).mkdir(parents=True, exist_ok=True)
+Path("frontend/public/catalogs").mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
+app.mount("/catalogs", StaticFiles(directory="frontend/public/catalogs"),
+          name="catalogs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

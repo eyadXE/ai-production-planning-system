@@ -252,3 +252,18 @@ class FxRate(Base):
     currency: Mapped[str] = mapped_column(String(8), unique=True)  # SAR | USD
     egp_per_unit: Mapped[float] = mapped_column(Float)  # 1 unit of currency = X EGP
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Product(Base):
+    """Catalog product — mirrors the Ousus product lines from ousus.com."""
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category: Mapped[str] = mapped_column(String(48))       # Carbon Steel, ...
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    image: Mapped[str] = mapped_column(String(200), default="")
+    catalogue_url: Mapped[str] = mapped_column(String(300), default="")
+    # estimation mapping; null => custom engineering required (manual quote)
+    est_kind: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    unit: Mapped[str] = mapped_column(String(16), default="count")
