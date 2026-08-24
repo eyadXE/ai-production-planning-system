@@ -169,16 +169,16 @@ def load_fx_rates(session) -> None:
 
 def create_demo_users(session, account_ids: dict[str, int]) -> None:
     users = [
-        User(email="manager@ousus.local", full_name="Production Manager",
+        User(email="manager@oususapp.com", full_name="Production Manager",
              password_hash=hash_password(DEFAULT_PASSWORD), role="manager"),
-        User(email="engineer@ousus.local", full_name="Senior Estimator",
+        User(email="engineer@oususapp.com", full_name="Senior Estimator",
              password_hash=hash_password(DEFAULT_PASSWORD), role="engineer"),
-        User(email="viewer@ousus.local", full_name="Stakeholder",
+        User(email="viewer@oususapp.com", full_name="Stakeholder",
              password_hash=hash_password(DEFAULT_PASSWORD), role="viewer"),
     ]
     first_account = next(iter(account_ids.values()))
     users.append(
-        User(email="client@ousus.local", full_name="Client Contact",
+        User(email="client@oususapp.com", full_name="Client Contact",
              password_hash=hash_password(DEFAULT_PASSWORD), role="client",
              account_id=first_account)
     )

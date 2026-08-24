@@ -89,7 +89,7 @@ def test_clause_citations_present():
 
 def test_demo_user_login():
     with SessionLocal() as s:
-        manager = s.query(User).filter_by(email="manager@ousus.local").one()
+        manager = s.query(User).filter_by(email="manager@oususapp.com").one()
         assert manager.role == "manager"
         assert verify_password(DEFAULT_PASSWORD, manager.password_hash)
         assert not verify_password("wrong", manager.password_hash)
