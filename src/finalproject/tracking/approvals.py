@@ -71,14 +71,13 @@ def decide(session: Session, approval_id: int, approver: User,
                 if approved and account_email(session, project.account_id):
                     from finalproject.tracking.notify import send_email
 
-                    schedule = (estimate.citations_json or {}).get("schedule") or {}
                     send_email(
                         session, project.account_id, "plan_accepted",
                         {
                             "code": project.code,
                             "title": project.title,
-                            "finish": schedule.get("planned_finish", "to be confirmed"),
                         },
+                        estimate=estimate, project=project,
                     )
     session.commit()
     session.refresh(approval)

@@ -58,8 +58,12 @@ export default function Landing() {
       </nav>
 
       {/* hero */}
-      <section className="border-b border-border bg-gradient-to-b from-card to-background">
-        <div className="mx-auto max-w-[1440px] px-6 py-20 text-center sm:px-10">
+      <section className="relative border-b border-border">
+        <div className="absolute inset-0">
+          <img src="/hero.jpg" alt="" className="h-full w-full object-cover opacity-25" />
+          <div className="absolute inset-0 bg-gradient-to-b from-background/60 via-background/70 to-background" />
+        </div>
+        <div className="relative mx-auto max-w-[1440px] px-6 py-24 text-center sm:px-10">
           <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-primary">
             The trusted name in steel fabrication in the region
           </p>
@@ -76,10 +80,43 @@ export default function Landing() {
               Request a service <ArrowRight className="size-4" />
             </Link>
             {!user && (
-              <Link href="/login" className="border border-border px-5 py-3 font-mono text-xs text-muted-foreground hover:border-primary hover:text-primary">
+              <Link href="/login" className="border border-primary/40 bg-background/50 px-5 py-3 font-mono text-xs text-foreground hover:border-primary hover:text-primary">
                 Client sign in
               </Link>
             )}
+          </div>
+        </div>
+      </section>
+
+      {/* about */}
+      <section className="mx-auto max-w-[1440px] px-6 py-16 sm:px-10">
+        <div className="grid items-center gap-10 lg:grid-cols-2">
+          <div>
+            <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">About Ousus</p>
+            <h2 className="font-mono text-2xl font-bold text-foreground">
+              Decades of fabrication discipline, now with a production platform to match.
+            </h2>
+            <p className="mt-5 font-mono text-xs leading-6 text-muted-foreground">
+              From its workshop, Ousus delivers carbon steel, structural steel,
+              aluminium decorative and stainless steel products for projects
+              across the region — railings, staircases, gates, walkways,
+              warehouses and more. Every job is planned before it is cut:
+              materials verified against stock, hours taken from the rate
+              handbook, schedules booked against real weekly capacity, and
+              nothing released without management sign-off.
+            </p>
+            <div className="mt-6 grid grid-cols-3 gap-4">
+              {[["4", "Product lines"], ["40+", "Product types"], ["9", "Tracked stages"]].map(([n, l]) => (
+                <div key={l} className="border border-border bg-card p-4">
+                  <p className="font-mono text-2xl font-bold text-primary">{n}</p>
+                  <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{l}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <img src="/about-1.png" alt="Ousus fabrication" className="h-56 w-full border border-border object-cover" />
+            <img src="/about-2.png" alt="Ousus products" className="mt-8 h-56 w-full border border-border object-cover" />
           </div>
         </div>
       </section>
@@ -105,6 +142,16 @@ export default function Landing() {
           Catalogues and references available at{" "}
           <a href="https://ousus.com" target="_blank" rel="noreferrer" className="text-primary hover:underline">ousus.com</a>
         </p>
+      </section>
+
+      {/* workshop strip */}
+      <section className="relative h-56 overflow-hidden border-y border-border">
+        <img src="/workshop.png" alt="Ousus workshop" className="h-full w-full object-cover opacity-40" />
+        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
+          <Link href="/request" className="flex items-center gap-2 border border-primary/60 bg-background/80 px-6 py-3 font-mono text-xs font-bold text-primary hover:bg-primary hover:text-primary-foreground">
+            Ask for a quote <ArrowRight className="size-4" />
+          </Link>
+        </div>
       </section>
 
       {/* process */}

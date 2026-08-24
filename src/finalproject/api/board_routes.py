@@ -12,6 +12,7 @@ from finalproject.db.database import get_session
 from finalproject.db.models import Account, Estimate, Project, Spec, User
 from finalproject.engine.estimator import estimate as run_estimate
 from finalproject.engine.parser import parse_spec
+from finalproject.llm.spec_extraction import extract_spec
 from finalproject.tracking import approvals as approvals_svc
 from finalproject.tracking import service as tracking
 from finalproject.tracking.service import STAGES
@@ -50,12 +51,14 @@ def estimate_spec(code: str,
                   user: User = Depends(require_roles("engineer", "manager")),
                   session: Session = Depends(get_session)):
     """Runs the pipeline on a spec; creates/updates the project and queues
-    the plan for manager release (clause 0.2)."""
+    the plan for manager release (clause 0.2). Uses the LLM extraction chain
+    when keys are configured, falling back to the deterministic parser."""
     spec = session.scalar(select(Spec).where(Spec.code == code))
     if not spec:
         raise HTTPException(404, f"spec {code} not found")
 
-    result = run_estimate(session, spec.raw_text)
+    parsed, source = extract_spec(spec.raw_text)
+    result = run_estimate(session, spec.raw_text, parsed)
     if result.decision in ("ESCALATE", "REFUSE_OVERRIDE"):
         return {"spec": code, "decision": result.decision,
                 "key_clause": result.key_clause, "reasons": result.reasons}
@@ -102,6 +105,7 @@ def estimate_spec(code: str,
         "project": project.code,
         "estimate_version": version,
         "decision": result.decision,
+        "parsed_by": source,
         "fab_hours": result.fab_hours,
         "install_hours": result.install_hours,
         "final_price_egp": result.final_price_egp,

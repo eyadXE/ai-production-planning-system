@@ -28,18 +28,18 @@ class ProviderConfig:
 
 DEFAULT_CHAIN = [
     ProviderConfig(
-        "gemini", "GEMINI_API_KEY", "gemini-2.0-flash",
+        "gemini", "GEMINI_API_KEY", "gemini-2.5-flash",
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "openai", 1400,
     ),
     ProviderConfig(
-        "groq", "GROQ_API_KEY", "llama-3.3-70b-versatile",
+        "groq", "GROQ_API_KEY", "qwen/qwen3.6-27b",
         "https://api.groq.com/openai/v1/chat/completions",
         "openai", 700,
     ),
     ProviderConfig(
         "openrouter-free", "OPENROUTER_API_KEY",
-        "meta-llama/llama-3.3-70b-instruct:free",
+        "nvidia/nemotron-3.5-lightning:free",
         "https://openrouter.ai/api/v1/chat/completions",
         "openai", 200,
     ),
