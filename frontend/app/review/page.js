@@ -10,6 +10,7 @@ export default function Review() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [results, setResults] = useState({});
+  const [decisionLog, setDecisionLog] = useState([]);
 
   const load = useCallback(async () => {
     try { setItems(await api("/requests/pending")); } catch (e) { setError(e.message); }
@@ -22,6 +23,12 @@ export default function Review() {
     try {
       const r = await api(`/requests/${code}/review?approve=${approve}`, { method: "POST" });
       setResults((p) => ({ ...p, [code]: r }));
+      setDecisionLog((prev) => [{
+        code, decision: r.decision, key_clause: r.key_clause,
+        reasons: r.reasons || [], fab_hours: r.fab_hours,
+        install_hours: r.install_hours, price: r.final_price_egp,
+        approval_id: r.approval_id,
+      }, ...prev]);
       await load();
     } catch (e) { setError(e.message); } finally { setBusy(""); }
   }
@@ -30,6 +37,29 @@ export default function Review() {
     <AppShell active="Requests" title="Engineering review"
               subtitle="Client requests waiting to enter the planning phase.">
       {error && <div className="text-destructive">{error}</div>}
+
+      {decisionLog.length > 0 && (
+        <section>
+          <h3 className="mb-3 mt-2 font-mono text-sm font-bold uppercase tracking-wider text-muted-foreground">Decisions this session</h3>
+          {decisionLog.map((d) => (
+            <div key={d.code} className="mb-3 border border-border bg-card p-4">
+              <b className="font-mono text-xs text-foreground">{d.code} — Decision: {d.decision}</b>
+              <span className="ml-2 border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">clause {d.key_clause}</span>
+              {d.fab_hours != null && (
+                <span className="ml-2 font-mono text-[10px] text-muted-foreground">
+                  {d.fab_hours} h fab · {d.install_hours} h install
+                  {d.price ? ` · EGP ${Number(d.price).toLocaleString()}` : ""}
+                  {d.approval_id ? ` · gate #${d.approval_id}` : ""}
+                </span>
+              )}
+              <ul className="mt-1 list-disc pl-5 font-mono text-[10px] leading-5 text-muted-foreground">
+                {d.reasons.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            </div>
+          ))}
+        </section>
+      )}
+
       {items.length === 0 && (
         <div className="border border-border bg-card p-5 font-mono text-xs text-muted-foreground">No requests waiting for review.</div>
       )}
