@@ -7,7 +7,8 @@ import AppShell from "../../components/AppShell";
 import { api, getUser } from "../../lib/api";
 
 function CatalogInner() {
-  const user = getUser();
+  const [user, setUser] = useState(null);
+  useEffect(() => setUser(getUser()), []);
   const [catalog, setCatalog] = useState(null);
   const [catalogs, setCatalogs] = useState([]);
   const [cart, setCart] = useState([]);

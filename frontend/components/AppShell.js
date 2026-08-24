@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BarChart3, Box, FileCheck2, Gauge, Hammer,
   LayoutDashboard, MessageSquare, X, Menu, LogOut,
 } from "lucide-react";
-import { clearSession } from "../lib/api";
+import { clearSession, getUser } from "../lib/api";
 import ThemeToggle from "./ThemeToggle";
 
 const NAV = [
@@ -23,8 +23,18 @@ const CLIENT_NAV = [{ href: "/my", label: "My Projects", icon: Box }];
 export default function AppShell({ active, title, subtitle, children }) {
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const user = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("ousus_user") || "null") : null;
-  if (!user) return null;
+  const [user, setUser] = useState(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setUser(getUser());
+    setReady(true);
+  }, []);
+  if (!ready) return null;          // SSR-safe: render only after mount
+  if (!user) {
+    if (typeof window !== "undefined") window.location.href = "/login";
+    return null;
+  }
 
   const items = user.role === "client"
     ? CLIENT_NAV
