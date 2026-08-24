@@ -7,7 +7,14 @@ authors = [
     { name = "Eyad Magdy", email = "eyadmagdywork@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "sqlalchemy>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
 
 [project.scripts]
 finalproject = "finalproject:main"
