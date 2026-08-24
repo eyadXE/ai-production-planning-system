@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from finalproject.core.security import hash_password, verify_password
 from finalproject.db.models import Account, User
 
-VALID_ROLES = ("client", "engineer", "manager", "viewer")
+VALID_ROLES = ("client", "estimator", "engineer", "manager", "viewer")
 
 
 class AuthError(Exception):

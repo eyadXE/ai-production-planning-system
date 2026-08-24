@@ -221,7 +221,7 @@ def parse_spec(raw_text: str) -> ParsedSpec:
         normalized = finish.lower().strip(" .")
         if normalized != "none":
             parsed.missing.append("finish")
-    if parsed.deadline is None and not parsed.override_attempt:
-        parsed.missing.append("required date")
+    # deadline is optional: the platform estimates completion itself;
+    # a client-provided date only enables DELAY_RISK detection.
 
     return parsed

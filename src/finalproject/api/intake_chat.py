@@ -1,98 +1,65 @@
-"""Conversational intake agent — the LLM conducts the interview.
+"""Conversational custom-work intake — LLM conducts the interview.
 
-No predefined script: the model decides what to ask next based on what is
-still missing. The server only validates the final structure and creates
-the request. If every provider is down, the endpoint reports llm=false so
-the client falls back to the deterministic form flow (never breaks).
+The server owns the collected-state: after every turn it merges whatever the
+model extracted into `collected_json.fields`, and the next prompt states
+explicitly what is KNOWN vs MISSING so the model can never re-ask.
+Minimum schema to submit: name, description (with size), quantity,
+material_finish. Site / deadline asked once but optional.
 """
 
 import json
+import logging
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finalproject.api.intake_routes import _render_raw, next_spec_code
 from finalproject.auth.dependencies import get_current_user
 from finalproject.db.database import get_session
+from finalproject.api.intake_guided import guided_turn
+from finalproject.auth.service import VALID_ROLES  # noqa
+from finalproject.api.intake_routes import next_spec_code
 from finalproject.db.models import ChatMessage, ChatSession, Spec, User
 from finalproject.llm.base import configured_chain
 from finalproject.llm.client import LLMClient, extract_json
 
 router = APIRouter(prefix="/intake", tags=["intake"])
 
-VALID_ITEM_KINDS = {
-    "railing", "mezzanine", "flight", "gate_double", "gate_single",
-    "security_door", "caged_ladder", "support_frame", "racking_bay",
-    "canopy", "floor_plate_area",
-}
-
-# models often append units ("railing(metres)") or use synonyms
-KIND_ALIASES = {
-    "fence": "railing", "balustrade": "railing", "guard_rail": "railing",
-    "guardrail": "railing",
-    "deck": "mezzanine", "platform": "mezzanine",
-    "staircase": "flight", "stairs": "flight", "straight_flight": "flight",
-    "double_gate": "gate_double", "single_gate": "gate_single",
-    "door": "security_door", "ladder": "caged_ladder",
-    "frame": "support_frame", "rack": "racking_bay",
-}
-
-
-def normalize_kind(raw: str) -> str | None:
-    k = str(raw).strip().lower().split("(")[0].strip().replace(" ", "_")
-    if k in VALID_ITEM_KINDS:
-        return k
-    return KIND_ALIASES.get(k)
-
-
-def clean_items(raw_items) -> list[dict]:
-    out = []
-    for i in raw_items or []:
-        if not isinstance(i, dict):
-            continue
-        kind = normalize_kind(i.get("kind", ""))
-        qty = i.get("qty")
-        try:
-            qty = float(qty)
-        except (TypeError, ValueError):
-            continue
-        if kind and qty > 0:
-            out.append({"kind": kind, "qty": qty})
-    return out
+FIELD_ORDER = [
+    ("description", "what it is + key dimensions/size"),
+    ("quantity", "how many units"),
+    ("material_finish", "material and finish"),
+    ("quantity", "how many units"),
+    ("material_finish", "material and finish (suggest a default if unsure)"),
+    ("site", "delivery/installation location"),
+    ("required_raw", "deadline phrase (optional — we estimate completion ourselves)"),
+]
+REQUIRED = {"name", "description", "quantity", "material_finish"}
 
 SYSTEM_PROMPT = """You are the friendly custom-work assistant for Ousus, a \
-steel fabrication company. The client wants something CUSTOM made that is not \
-in the standard catalog. Conduct a short natural conversation to collect the \
-MINIMUM set of details an engineer needs to plan and quote it:
+steel fabrication company. The client wants something CUSTOM built. Your job \
+is to collect the missing fields listed in the CONTEXT the server gives you \
+each turn.
 
-REQUIRED (cannot submit without):
-- name: short item name
-- description: what it is + key dimensions/size (L x W x H, or area, or rise)
-- quantity: how many units
-- material_finish: mild steel / stainless / aluminium, and finish (paint RAL,
-  galvanised, polished...) — if unknown, suggest a sensible default and confirm
+HARD RULES
+- NEVER ask about a field already present under KNOWN. Not to confirm it, \
+not to rephrase it. Once is enough.
+- Ask about exactly ONE missing field per message (follow the MISSING order).
+- If the client's answer contains several answers, accept them all silently.
+- If an answer is vague, ask one concrete clarifying question about it.
+- Never invent values. Never compute prices or dates. We estimate completion \
+ourselves — if the client has no deadline, say that's fine.
+- When nothing is MISSING, summarise all fields briefly and ask the client \
+to confirm. Only set complete=true AFTER they confirm.
 
-OPTIONAL but ask once if not offered:
-- site: delivery/installation location
-- required_raw: deadline phrase copied verbatim (e.g. "within 6 weeks")
-
-RULES
-- One topic per message. Short, warm, professional.
-- If the client's answer already contains several answers, accept them all —
-  never re-ask something they told you.
-- Never invent values. Never compute prices or dates.
-- When REQUIRED fields are collected, summarise everything in your reply and
-  ask the client to confirm submission. Only after they confirm, set
-  complete=true.
-
-OUTPUT — raw JSON only, nothing else:
-{"reply": "<your message>", "complete": false, "data": null}
-or on confirmation:
-{"reply": "...", "complete": true, "data": {"name": "...",
- "description": "...", "quantity": 1, "material_finish": "...",
- "site": "...", "required_raw": "..."}}"""
+OUTPUT — raw JSON only. IMPORTANT: "data" must contain ALL fields known so far on EVERY turn (not just new ones):
+{"reply": "...", "complete": false, "data": {"name":"..."}} or
+{"reply":"...","complete":false,"data":{"name":"...","description":"...","quantity":2}}
+or on confirmed submission:
+{"reply": "...", "complete": true, "data": {"name":"...","description":"...",
+"quantity":1,"material_finish":"...","site":"...","required_raw":"..."}}"""
 
 
 class MessageIn(BaseModel):
@@ -107,6 +74,28 @@ def _history(session_db: Session, cs: ChatSession) -> str:
     return "\n".join(f"{m.role.upper()}: {m.content}" for m in msgs[-8:])
 
 
+def _merge_fields(stored: dict, data: dict | None) -> dict:
+    fields = dict((stored or {}).get("fields") or {})
+    for key, _ in FIELD_ORDER:
+        value = (data or {}).get(key)
+        if value not in (None, ""):
+            fields[key] = value
+    return fields
+
+
+def _context(fields: dict, photo: str | None) -> str:
+    known = {k: v for k, v in fields.items()}
+    if known.get("description") and not known.get("name"):
+        words = str(known["description"]).split()
+        known["name"] = " ".join(words[:5]).strip(" ,.-").title()
+    missing = [label for key, label in FIELD_ORDER if key not in known]
+    lines = [f"KNOWN: {json.dumps(known, ensure_ascii=False)}",
+             f"MISSING: {missing or 'nothing — summarise & confirm'}"]
+    if photo:
+        lines.append("A reference photo was attached by the client.")
+    return "\n".join(lines)
+
+
 @router.post("/start")
 def start(user: User = Depends(get_current_user),
           session: Session = Depends(get_session)):
@@ -116,14 +105,16 @@ def start(user: User = Depends(get_current_user),
         return {"session_id": None, "reply": None, "llm": False}
 
     cs = ChatSession(account_id=user.account_id, user_id=user.id,
-                     purpose="spec_intake", collected_json={}, status="active")
+                     purpose="spec_intake", collected_json={"fields": {}},
+                     status="active")
     session.add(cs)
     session.flush()
 
     client = LLMClient()
+    context = _context({}, None)
     resp = client.complete(
-        "The client just opened the intake chat. Greet them and ask what "
-        "they would like built.")
+        context + "\n\nThe client just opened the chat. Greet them warmly and "
+        "ask what they would like us to build.")
     if resp is None:
         session.rollback()
         return {"session_id": None, "reply": None, "llm": False}
@@ -147,74 +138,92 @@ def message(session_id: int, body: MessageIn,
     session.add(ChatMessage(session_id=cs.id, role="client",
                             content=body.text))
 
+    stored = cs.collected_json or {}
+    fields = _merge_fields(stored, stored.get("pending_data"))
+
+    # deterministic guided fallback when every provider is down
+    if stored.get("guided") or not configured_chain():
+        return guided_turn(session, cs, user, stored, fields, body.text)
+
     client = LLMClient()
-    resp = client.complete(_history(session, cs) + f"\nCLIENT: {body.text}",
-                           system=SYSTEM_PROMPT)
+    prompt = (_history(session, cs) + f"\nCLIENT: {body.text}"
+              + "\n\nSERVER CONTEXT:\n" + _context(fields, stored.get("photo")))
+    resp = client.complete(prompt, system=SYSTEM_PROMPT)
     if resp is None:
+        # every provider down -> switch this session to the rule-driven
+        # guided interview over the same schema
+        stored = dict(stored)
+        stored["guided"] = True
+        cs.collected_json = stored
+        session.add(ChatMessage(session_id=cs.id, role="assistant",
+                                content="(Switched to guided mode.)"))
         session.commit()
-        return {"llm": False,
-                "reply": ("Our smart assistant is offline right now — please "
-                          "use the guided form instead.")}
+        result = guided_turn(session, cs, user, stored, fields, body.text)
+        result["guided"] = True
+        return result
     data = extract_json(resp.content)
-    if not data or "reply" not in data:
-        # one retry with a stricter nudge
+    if not data or not str(data.get("reply") or "").strip():
         resp = client.complete(
-            _history(session, cs) +
-            "\n\nSYSTEM: Reply with ONLY the JSON object as instructed.",
+            prompt + "\n\nSYSTEM: Output ONLY the JSON object as instructed.",
             system=SYSTEM_PROMPT)
         data = extract_json(resp.content) if resp else None
-        if not data:
-            session.commit()
-            return {"llm": True, "reply": "Could you say that once more?"}
+    if not data or not str(data.get("reply") or "").strip():
+        # two consecutive unusable turns -> deterministic guided mode
+        stored = dict(stored); stored["guided"] = True
+        cs.collected_json = stored
+        session.commit()
+        result = guided_turn(session, cs, user, stored, fields, body.text)
+        result["auto_switched"] = True
+        return result
 
-    if data.get("complete") and isinstance(data.get("data"), dict):
-        d = data["data"]
-        # schema gate: the minimum an engineer needs to plan a custom build
-        missing = []
-        name = str(d.get("name") or "").strip()
-        desc = str(d.get("description") or "").strip()
-        qty = d.get("quantity")
-        try:
-            qty = float(qty)
-        except (TypeError, ValueError):
-            qty = 0
-        if not name:
-            missing.append("name")
-        if len(desc) < 5:
-            missing.append("description/dimensions")
-        if not qty or qty <= 0:
-            missing.append("quantity")
-        material = str(d.get("material_finish") or "").strip()
-        if not material:
-            d["material_finish"] = "mild steel, shop painted"
-        if missing:
+    # merge whatever the model extracted this turn into server-side state
+    fields = _merge_fields(fields, data.get("data"))
+    missing_required = [k for k in REQUIRED if k not in fields]
+
+    # name derives from description — clients shouldn't have to name things
+    if not str(fields.get("name") or "").strip() and fields.get("description"):
+        words = str(fields["description"]).split()
+        fields["name"] = " ".join(words[:5]).strip(" ,.-").title()
+
+    if data.get("complete"):
+        if missing_required:
             data["complete"] = False
-            data["reply"] = ("Before we submit — I still need: "
-                             + ", ".join(missing) + ". Could you fill those in?")
+            labels = [label for key, label in FIELD_ORDER
+                      if key in missing_required]
+            data["reply"] = ("Before I submit I still need: "
+                             + ", ".join(labels) + ".")
         else:
             code = next_spec_code(session)
+            desc = str(fields["description"])
+            qty = fields["quantity"]
+            try:
+                qty_f = float(qty)
+                qty_txt = f"x{qty_f:g}"
+            except (TypeError, ValueError):
+                qty_txt = ""
+            material = fields.get("material_finish", "")
             structured = {
                 "items": [],
                 "custom": [{
-                    "name": name,
+                    "name": fields["name"],
                     "description": desc,
-                    "photo": (cs.collected_json or {}).get("photo", ""),
+                    "photo": stored.get("photo", ""),
                     "quantity": qty,
-                    "material_finish": d.get("material_finish"),
+                    "material_finish": material,
                 }],
-                "finish": d.get("material_finish") or "",
-                "site": d.get("site") or "",
-                "required_raw": d.get("required_raw") or "",
+                "finish": material,
+                "site": fields.get("site") or "",
+                "required_raw": fields.get("required_raw") or "",
             }
             spec = Spec(
                 code=code,
                 account_id=user.account_id,
-                title=name[:200],
+                title=str(fields["name"])[:200],
                 raw_text=(
-                    f"Project ID: {code}\nTitle: {name}\nDate: auto\n\n"
-                    f"Items: custom — {desc} x{qty:g} ({material})\n"
+                    f"Project ID: {code}\nTitle: {fields['name']}\nDate: auto\n\n"
+                    f"Items: custom — {desc} {qty_txt} ({material})\n"
                     f"Site: {structured['site'] or 'unstated'}\n"
-                    f"Required: {structured['required_raw'] or 'unstated'}\n"
+                    f"Required: {structured['required_raw'] or 'no deadline given'}\n"
                 ),
                 structured_json=structured,
                 source="chat_intake",
@@ -222,7 +231,8 @@ def message(session_id: int, body: MessageIn,
             )
             session.add(spec)
             cs.status = "submitted"
-            cs.collected_json = structured
+            cs.collected_json = {"fields": fields,
+                                 "photo": stored.get("photo", "")}
             session.add(ChatMessage(
                 session_id=cs.id, role="assistant",
                 content=f"Submitted as request {spec.code}."))
@@ -232,29 +242,31 @@ def message(session_id: int, body: MessageIn,
 
     session.add(ChatMessage(session_id=cs.id, role="assistant",
                             content=data.get("reply", "")))
-    cs.collected_json = data.get("data") or cs.collected_json
+    cs.collected_json = {"fields": fields, "photo": stored.get("photo", ""),
+                         "pending_data": data.get("data")}
     session.commit()
-    return {"llm": True, "complete": False, "reply": data["reply"]}
+    return {"llm": True, "complete": False,
+                    "reply": data.get("reply") or "Could you confirm that once more?"}
 
 
-class _ReqItem:
-    def __init__(self, kind, qty, note=""):
-        self.kind = kind
-        self.qty = qty
-        self.note = note
+class PhotoIn(BaseModel):
+    url: str
 
 
-def _as_request_body(d: dict):
-    """Adapter so _render_raw works with chat data."""
-
-    class B:
-        title = d.get("title", "")
-        finish = d.get("finish") or ""
-        site = d.get("site") or ""
-        required_raw = d.get("required_raw", "")
-        items = [_ReqItem(i["kind"], i["qty"], "") for i in d["items"]]
-
-    return B()
+@router.post("/{session_id}/photo")
+def attach_photo(session_id: int, body: PhotoIn,
+                 user: User = Depends(get_current_user),
+                 session: Session = Depends(get_session)):
+    cs = session.get(ChatSession, session_id)
+    if not cs or cs.user_id != user.id:
+        raise HTTPException(404, "chat session not found")
+    if not body.url.startswith("/uploads/"):
+        raise HTTPException(422, "invalid upload url")
+    stored = dict(cs.collected_json or {})
+    stored["photo"] = body.url
+    cs.collected_json = stored
+    session.commit()
+    return {"ok": True}
 
 
 @router.get("/sessions/mine")
@@ -268,22 +280,16 @@ def my_sessions(user: User = Depends(get_current_user),
             for s in sessions]
 
 
-class PhotoIn(BaseModel):
-    url: str
-
-
-@router.post("/{session_id}/photo")
-def attach_photo(session_id: int, body: PhotoIn,
-                 user: User = Depends(get_current_user),
-                 session: Session = Depends(get_session)):
-    """Client attached a reference photo; remembered for the submission."""
+@router.post("/{session_id}/guided-switch")
+def switch_to_guided(session_id: int,
+                     user: User = Depends(get_current_user),
+                     session: Session = Depends(get_session)):
     cs = session.get(ChatSession, session_id)
     if not cs or cs.user_id != user.id:
         raise HTTPException(404, "chat session not found")
-    if not body.url.startswith("/uploads/"):
-        raise HTTPException(422, "invalid upload url")
-    collected = dict(cs.collected_json or {})
-    collected["photo"] = body.url
-    cs.collected_json = collected
+    stored = dict(cs.collected_json or {})
+    stored["guided"] = True
+    cs.collected_json = stored
     session.commit()
-    return {"ok": True}
+    return guided_turn(session, cs, user, stored, {},
+                       stored.get("pending_text", ""))

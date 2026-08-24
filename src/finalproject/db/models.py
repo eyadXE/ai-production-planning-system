@@ -106,6 +106,9 @@ class Project(Base):
     stage: Mapped[str] = mapped_column(String(32))  # enquiry .. closed
     status: Mapped[str] = mapped_column(String(24))  # on_track | overdue | blocked_material
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    estimated_finish: Mapped[date | None] = mapped_column(Date, nullable=True)
+    assigned_engineer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True)
     release_status: Mapped[str] = mapped_column(
         String(16), default="na"
     )  # na | queued | released | rejected
@@ -113,6 +116,7 @@ class Project(Base):
 
     account: Mapped["Account"] = relationship(back_populates="projects")
     spec: Mapped["Spec | None"] = relationship()
+    assigned_engineer: Mapped["User | None"] = relationship()
     stage_events: Mapped[list["StageEvent"]] = relationship(back_populates="project")
     estimates: Mapped[list["Estimate"]] = relationship(back_populates="project")
     bookings: Mapped[list["ScheduleBooking"]] = relationship(back_populates="project")

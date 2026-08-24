@@ -40,6 +40,8 @@ def _project_out(p: Project, ev) -> dict:
         "release_status": p.release_status,
         "overdue": tracking.is_overdue(p, ev),
         "required_date": p.required_date.isoformat() if p.required_date else None,
+        "estimated_finish": (p.estimated_finish.isoformat()
+                             if p.estimated_finish else None),
     }
 
 
@@ -48,7 +50,7 @@ def _project_out(p: Project, ev) -> dict:
 
 @router.post("/specs/{code}/estimate")
 def estimate_spec(code: str,
-                  user: User = Depends(require_roles("engineer", "manager")),
+                  user: User = Depends(require_roles("estimator", "manager")),
                   session: Session = Depends(get_session)):
     """Runs the pipeline on a spec; creates/updates the project and queues
     the plan for manager release (clause 0.2). Uses the LLM extraction chain
@@ -99,6 +101,11 @@ def estimate_spec(code: str,
     )
     session.add(est)
     session.flush()
+    if result.schedule and result.schedule.get("planned_finish"):
+        from datetime import date as _date
+
+        project.estimated_finish = _date.fromisoformat(
+            result.schedule["planned_finish"])
     approval = approvals_svc.queue_plan_release(session, est, project)
     return {
         "spec": code,
@@ -212,3 +219,50 @@ def llm_status(user: User = Depends(get_current_user)):
         "providers": [c.name for c in configured_chain()],
         "primary": (configured_chain() or [None])[0].name if configured_chain() else None,
     }
+
+
+class AssignIn(BaseModel):
+    engineer_id: int
+
+
+@router.post("/projects/{code}/assign")
+def assign_project(code: str, body: AssignIn,
+                   user: User = Depends(require_roles("manager")),
+                   session: Session = Depends(get_session)):
+    """Manager assigns a project engineer who follows all stages."""
+    project = session.scalar(select(Project).where(Project.code == code))
+    if not project:
+        raise HTTPException(404, f"project {code} not found")
+    engineer = session.get(User, body.engineer_id)
+    if not engineer or engineer.role != "engineer":
+        raise HTTPException(422, "assignee must be a user with role 'engineer'")
+    project.assigned_engineer_id = engineer.id
+    session.commit()
+    return {"code": code, "assigned_to": engineer.full_name,
+            "engineer_id": engineer.id}
+
+
+@router.get("/team/engineers")
+def list_engineers(user: User = Depends(require_roles("manager")),
+                   session: Session = Depends(get_session)):
+    engineers = session.scalars(
+        select(User).where(User.role == "engineer")).all()
+    return [{"id": u.id, "name": u.full_name, "email": u.email}
+            for u in engineers]
+
+
+@router.get("/my-assignments")
+def my_assignments(user: User = Depends(get_current_user),
+                   session: Session = Depends(get_session)):
+    if user.role != "engineer":
+        raise HTTPException(403, "project engineers only")
+    projects = session.scalars(
+        select(Project).where(Project.assigned_engineer_id == user.id)).all()
+    out = []
+    for p in projects:
+        ev = tracking.current_event(session, p)
+        entry = _project_out(p, ev)
+        entry["estimated_finish"] = (p.estimated_finish.isoformat()
+                                     if p.estimated_finish else None)
+        out.append(entry)
+    return {"projects": out}

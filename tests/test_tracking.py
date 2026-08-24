@@ -38,6 +38,11 @@ def engineer():
 
 
 @pytest.fixture(scope="module")
+def estimator():
+    return login("estimator@oususapp.com")
+
+
+@pytest.fixture(scope="module")
 def client_user():
     return login("client@oususapp.com")
 
@@ -92,14 +97,14 @@ def test_stage_requires_staff(client_user):
 # ---------- estimate -> gate -> release --------------------------------------
 
 
-def _estimate(code, engineer):
-    r = client.post(f"/specs/{code}/estimate", headers=engineer)
+def _estimate(code, estimator):
+    r = client.post(f"/specs/{code}/estimate", headers=estimator)
     assert r.status_code == 200, r.text
     return r.json()
 
 
-def test_estimate_queues_plan_for_release(engineer):
-    body = _estimate("J-001", engineer)
+def test_estimate_queues_plan_for_release(estimator):
+    body = _estimate("J-001", estimator)
     assert body["decision"] == "PLAN"
     assert body["fab_hours"] == 48.0
     assert body["release_status"] == "queued"
@@ -144,8 +149,8 @@ def test_audit_trail_names_the_approver(manager):
     assert all(a["at"] for a in decided)
 
 
-def test_refusal_specs_never_queue(engineer):
-    body = _estimate("J-022", engineer)
+def test_refusal_specs_never_queue(estimator):
+    body = _estimate("J-022", estimator)
     assert body["decision"] == "REFUSE_OVERRIDE"
     assert "approval_id" not in body
 

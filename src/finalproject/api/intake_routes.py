@@ -48,7 +48,7 @@ class RequestIn(BaseModel):
     custom: list[CustomItem] = []
     finish: str = ""
     site: str = ""
-    required_raw: str
+    required_raw: str = ""
 
 
 @router.get("/products")
@@ -151,7 +151,7 @@ def _render_raw(code: str, body: RequestIn) -> str:
 
 
 @router.get("/requests/pending")
-def pending_requests(user: User = Depends(require_roles("engineer", "manager")),
+def pending_requests(user: User = Depends(require_roles("estimator", "manager")),
                      session: Session = Depends(get_session)):
     from finalproject.db.models import Account
 
@@ -173,7 +173,7 @@ def pending_requests(user: User = Depends(require_roles("engineer", "manager")),
 
 @router.post("/requests/{code}/review")
 def review_request(code: str, approve: bool,
-                   user: User = Depends(require_roles("engineer", "manager")),
+                   user: User = Depends(require_roles("estimator", "manager")),
                    session: Session = Depends(get_session)):
     """Engineer gate: approve moves the request into the planning phase."""
     spec = session.scalar(select(Spec).where(Spec.code == code))
@@ -221,8 +221,8 @@ def review_request(code: str, approve: bool,
         if not fin or fin == "unstated":
             if not custom:      # custom objects carry their own description
                 missing.append("finish")
-        if parsed.deadline is None and not custom:
-            missing.append("required date")
+        # deadline is optional — the platform computes the estimated
+        # completion itself; client's date only drives DELAY_RISK
         parsed.missing = missing
 
     # Custom-only requests can't be auto-estimated by the rate handbook —
@@ -272,6 +272,11 @@ def review_request(code: str, approve: bool,
                             "schedule": result.schedule},
             created_by=user.id,
         )
+        if result.schedule and result.schedule.get("planned_finish"):
+            from datetime import date as _d
+
+            project.estimated_finish = _d.fromisoformat(
+                result.schedule["planned_finish"])
         session.add(est)
         session.flush()
         approval = approvals_svc.queue_plan_release(session, est, project)
@@ -334,6 +339,13 @@ def delete_project(code: str,
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
         raise HTTPException(404, f"project {code} not found")
+    if project.release_status == "released":
+        raise HTTPException(
+            403, "Released orders are permanent history and cannot be deleted "
+            "(needed to track client behaviour). Cancel instead.")
+    if project.stage not in ("Production Planning",):
+        raise HTTPException(
+            403, f"Project already at '{project.stage}' — too far along to delete.")
 
     for ev in session.scalars(select(StageEvent)
                               .where(StageEvent.project_id == project.id)).all():

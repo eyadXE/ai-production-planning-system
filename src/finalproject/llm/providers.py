@@ -38,6 +38,10 @@ def _openai_style(config: ProviderConfig, api_key: str | None,
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
         raise ProviderError(f"{config.name}: malformed response") from exc
+    if not str(content).strip():
+        # reasoning models sometimes emit empty content on the free tier —
+        # treat as a provider failure so the chain moves on
+        raise ProviderError(f"{config.name}: empty completion")
     usage = Usage(**{
         k: int(data.get("usage", {}).get(k.replace("_", ""), 0) or 0)
         for k in ("prompt_tokens", "completion_tokens", "requests")

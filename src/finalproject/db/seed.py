@@ -180,8 +180,10 @@ def create_demo_users(session, account_ids: dict[str, int]) -> None:
     users = [
         User(email="manager@oususapp.com", full_name="Production Manager",
              password_hash=hash_password(DEFAULT_PASSWORD), role="manager"),
-        User(email="engineer@oususapp.com", full_name="Senior Estimator",
+        User(email="engineer@oususapp.com", full_name="Project Engineer",
              password_hash=hash_password(DEFAULT_PASSWORD), role="engineer"),
+        User(email="estimator@oususapp.com", full_name="Estimator",
+             password_hash=hash_password(DEFAULT_PASSWORD), role="estimator"),
         User(email="viewer@oususapp.com", full_name="Stakeholder",
              password_hash=hash_password(DEFAULT_PASSWORD), role="viewer"),
     ]

@@ -43,7 +43,7 @@ def test_row_counts():
         assert len(s.query(Spec).all()) == 27
         assert len(s.query(Project).all()) == 8
         assert len(s.query(HandbookClause).all()) == 27
-        assert len(s.query(User).all()) == 4
+        assert len(s.query(User).all()) == 5
         assert len(s.query(FxRate).all()) == 2
 
 

@@ -5,17 +5,22 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3, Box, FileCheck2, Gauge, Hammer,
-  LayoutDashboard, MessageSquare, X, Menu, LogOut,
+  LayoutDashboard, MessageSquare, UserCheck, X, Menu, LogOut,
 } from "lucide-react";
 import { clearSession, getUser } from "../lib/api";
 import ThemeToggle from "./ThemeToggle";
 
 const NAV = [
-  { href: "/summary", label: "Overview", icon: LayoutDashboard, roles: ["engineer", "manager", "viewer"] },
-  { href: "/board", label: "Projects", icon: Box, roles: ["engineer", "manager", "viewer"] },
+  { href: "/summary", label: "Overview", icon: LayoutDashboard, roles: ["estimator", "engineer", "manager", "viewer"] },
+  { href: "/board", label: "Projects", icon: Box, roles: ["estimator", "engineer", "manager", "viewer"] },
+  { href: "/review", label: "Review Requests", icon: MessageSquare, roles: ["estimator", "manager"] },
+  { href: "/estimate", label: "Estimator", icon: Gauge, roles: ["estimator", "manager"] },
   { href: "/approvals", label: "Approvals", icon: FileCheck2, roles: ["manager"] },
-  { href: "/estimate", label: "Estimator", icon: Gauge, roles: ["engineer", "manager"] },
-  { href: "/review", label: "Requests", icon: MessageSquare, roles: ["engineer", "manager"] },
+  { href: "/assign", label: "Assign Engineers", icon: UserCheck, roles: ["manager"] },
+];
+
+const ENGINEER_NAV = [
+  { href: "/my-assignments", label: "My Assignments", icon: Hammer },
 ];
 
 const CLIENT_NAV = [{ href: "/my", label: "My Projects", icon: Box }];
@@ -36,9 +41,12 @@ export default function AppShell({ active, title, subtitle, children }) {
     return null;
   }
 
-  const items = user.role === "client"
+  let items = user.role === "client"
     ? CLIENT_NAV
     : NAV.filter((n) => n.roles.includes(user.role));
+  if (user.role === "engineer") {
+    items = [...items, ...ENGINEER_NAV];
+  }
 
   const initials = (user.full_name || user.email)
     .split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();

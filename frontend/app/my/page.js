@@ -44,7 +44,9 @@ export default function MyProjects() {
             </div>
             <p className="mt-2 font-mono text-xs text-foreground">{p.title}</p>
             <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{stageLabel(p)}</p>
-            <p className="mt-1 font-mono text-[10px] text-muted-foreground">Target: {p.required_date || "—"}</p>
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+              {p.estimated_finish ? `Estimated finish: ${p.estimated_finish}` : "Estimated finish: pending planning"}
+            </p>
           </div>
         ))}
       </div>

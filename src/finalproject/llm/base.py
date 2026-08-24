@@ -34,7 +34,7 @@ DEFAULT_CHAIN = [
         "openai", 1400,
     ),
     ProviderConfig(
-        "groq", "GROQ_API_KEY", "openai/gpt-oss-120b",
+        "groq", "GROQ_API_KEY", "qwen/qwen3.6-27b",
         "https://api.groq.com/openai/v1/chat/completions",
         "openai", 700, json_mode=False,
     ),

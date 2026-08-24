@@ -22,21 +22,32 @@ RETRY_BACKOFF_S = 0.15
 
 
 def extract_json(content: str) -> dict[str, Any] | None:
-    """Best-effort JSON recovery from an LLM reply."""
+    """Best-effort JSON recovery from an LLM reply (incl. reasoning models)."""
     text = content.strip()
+    # strip reasoning traces (<think>...</think>) that hybrid models emit
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.S).strip()
     try:
         data = json.loads(text)
         return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
         pass
-    start, end = text.find("{"), text.rfind("}")
-    if 0 <= start < end:
-        try:
-            data = json.loads(text[start:end + 1])
-            return data if isinstance(data, dict) else None
-        except json.JSONDecodeError:
-            return None
+    # try every {...} block, last one first (reasoning usually precedes it)
+    starts = [m.start() for m in re.finditer(r"\{", text)]
+    for start in reversed(starts):
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:i + 1]
+                    try:
+                        data = json.loads(candidate)
+                        return data if isinstance(data, dict) else None
+                    except json.JSONDecodeError:
+                        break
     return None
 
 

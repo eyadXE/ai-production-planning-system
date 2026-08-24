@@ -85,23 +85,30 @@ async function apiLogin(page, email) {
     check("all product images render", brokenImgs.length === 0,
           [...new Set(brokenImgs)].join(", ").slice(0, 120));
 
-    // ---------- add to cart (mapped product) ----------
+    // ---------- add to cart (mapped product, detail modal) ----------
     await page.locator("div.border", { hasText: "Railings" })
-              .locator('button:has-text("Add")').first().click();
+              .locator('button:has-text("Choose & configure")').first().click();
+    await page.waitForSelector('button:has-text("Add to request")', { timeout: 10000 });
+    await page.locator('.fixed input[type="number"]').fill("12");
+    await page.fill('input[placeholder*="RAL"]', "shop paint RAL 7016");
+    await page.click('button:has-text("Add to request")');
     await page.waitForTimeout(400);
+    const bodyAfterAdd = await page.innerText("body");
     check("cart indicator appears",
-          /in your request/.test(await page.innerText("body")));
+          /in your request/.test(bodyAfterAdd));
+    check("line keeps its finish", /RAL 7016/.test(
+      bodyAfterAdd.slice(bodyAfterAdd.indexOf("Your request"))));
 
     // qty edit
     const qtyInputs = page.locator('#your-request input[type="number"]');
     if (await qtyInputs.count()) {
-      await qtyInputs.first().fill("3");
+      await qtyInputs.first().fill("14");
       check("qty editable", true);
     }
 
-    // unmapped product -> custom line
+    // unmapped product -> custom line immediately
     await page.locator("div.border", { hasText: "Mushrabiya" })
-              .locator('button:has-text("Add")').first().click();
+              .locator('button:has-text("Choose & configure")').first().click();
     await page.waitForTimeout(400);
     check("unmapped product becomes custom line",
           /CUSTOM: Decorative Panels/i.test(await page.innerText("body")));

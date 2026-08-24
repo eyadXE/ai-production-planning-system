@@ -37,6 +37,11 @@ export default function RequestPage() {
   const [chatDoneCode, setChatDoneCode] = useState(null);
   const chatBoxRef = useRef(null);
 
+  // product detail modal
+  const [selected, setSelected] = useState(null);   // product object
+  const [selQty, setSelQty] = useState(1);
+  const [selFinish, setSelFinish] = useState("");
+
   // submit
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -62,9 +67,9 @@ export default function RequestPage() {
     chatBoxRef.current?.scrollTo(0, chatBoxRef.current.scrollHeight);
   }, [chatMsgs]);
 
-  function addToCart(p) {
+  function openProduct(p) {
     if (!p.est_kind) {
-      // not auto-estimable -> goes into the request as a custom line
+      // not auto-estimable -> custom line immediately
       setCustomLines((prev) =>
         prev.some((c) => c.name === p.name)
           ? prev
@@ -72,15 +77,28 @@ export default function RequestPage() {
       );
       return;
     }
+    setSelected(p);
+    setSelQty(1);
+    setSelFinish("");
+  }
+
+  function confirmAdd() {
+    const p = selected;
+    if (!p) return;
+    const finishNote = selFinish.trim() ? ` — ${selFinish.trim()}` : "";
     setCart((prev) => {
-      const i = prev.findIndex((c) => c.kind === p.est_kind && c.name === p.name);
+      const i = prev.findIndex(
+        (c) => c.kind === p.est_kind && c.name === p.name && c.finish === selFinish.trim()
+      );
       if (i >= 0) {
         const copy = [...prev];
-        copy[i] = { ...copy[i], qty: copy[i].qty + 1 };
+        copy[i] = { ...copy[i], qty: copy[i].qty + Number(selQty || 1) };
         return copy;
       }
-      return [...prev, { kind: p.est_kind, qty: 1, name: p.name }];
+      return [...prev, { kind: p.est_kind, qty: Number(selQty || 1),
+                         name: `${p.name}${finishNote}`, finish: selFinish.trim() }];
     });
+    setSelected(null);
   }
 
   function removeFromCart(i) {
@@ -297,9 +315,9 @@ export default function RequestPage() {
                     </p>
                     <div className="mt-3 flex items-center justify-between gap-2">
                       <span className="font-mono text-[9px] uppercase text-muted-foreground">per {p.unit}</span>
-                      <button onClick={() => addToCart(p)}
+                      <button onClick={() => openProduct(p)}
                               className="flex items-center gap-1 border border-border px-3 py-1.5 font-mono text-[10px] text-muted-foreground hover:border-primary hover:text-primary">
-                        <Plus className="size-3" /> Add
+                        <Plus className="size-3" /> Choose &amp; configure
                       </button>
                     </div>
                   </div>
@@ -372,6 +390,19 @@ export default function RequestPage() {
                       className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">
                 Send
               </button>
+              {chatOffline && (
+                <button onClick={async () => {
+                  setChatBusy(true);
+                  try {
+                    const out = await api(`/intake/${chatSession}/guided-switch`, { method: "POST" });
+                    if (out.complete) setChatDoneCode(out.code);
+                  } catch (e) { setError(e.message); }
+                  finally { setChatBusy(false); }
+                }} disabled={chatBusy}
+                        className="border border-border px-3 py-2.5 font-mono text-[10px] text-muted-foreground hover:text-foreground whitespace-nowrap">
+                  Quick form
+                </button>
+              )}
               <button onClick={() => setChatOpen(false)} aria-label="Close chat"
                       className="border border-border p-2.5 text-muted-foreground hover:text-foreground">
                 <X className="size-4" />
@@ -382,6 +413,50 @@ export default function RequestPage() {
       </section>
 
       {/* your request */}
+      {/* product detail modal */}
+      {selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+             onClick={() => setSelected(null)}>
+          <div className="w-full max-w-lg border border-border bg-card"
+               onClick={(e) => e.stopPropagation()}>
+            <div className="relative">
+              <img src={selected.image} alt={selected.name}
+                   onError={(e) => { e.currentTarget.style.display = "none"; }}
+                   className="h-44 w-full object-cover" />
+              <button onClick={() => setSelected(null)}
+                      className="absolute right-2 top-2 border border-border bg-background p-1.5 text-muted-foreground hover:text-foreground">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="p-5">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-primary">{selected.category}</p>
+              <h3 className="mt-1 font-mono text-base font-bold text-foreground">{selected.name}</h3>
+              <p className="mt-2 font-mono text-[11px] leading-5 text-muted-foreground">{selected.description}</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Quantity ({selected.unit})</label>
+                  <input type="number" min="0.1" step="any" value={selQty}
+                         onChange={(e) => setSelQty(parseFloat(e.target.value) || 1)}
+                         className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+                </div>
+                <div>
+                  <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Finish (optional)</label>
+                  <input placeholder="e.g. RAL 7016 / galvanised" value={selFinish}
+                         onChange={(e) => setSelFinish(e.target.value)}
+                         className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+                </div>
+              </div>
+              <button onClick={confirmAdd}
+                      className="mt-4 w-full bg-primary py-3 font-mono text-xs font-bold text-primary-foreground hover:opacity-90">
+                Add to request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <section id="your-request" className="border border-border bg-card p-5">
         <h2 className="font-mono text-sm font-bold text-foreground">Your request</h2>
 
@@ -390,7 +465,9 @@ export default function RequestPage() {
             <tbody>
               {cart.map((c, i) => (
                 <tr key={`c${i}`} className="border-b border-border">
-                  <td className="py-2 font-mono text-xs text-foreground">{c.name}</td>
+                  <td className="py-2 font-mono text-xs text-foreground">
+                    {c.name}{c.finish ? <span className="text-muted-foreground"> · {c.finish}</span> : null}
+                  </td>
                   <td className="w-28 py-2">
                     <input type="number" min="0.1" step="any" value={c.qty}
                            onChange={(e) => changeQty(i, parseFloat(e.target.value))}
@@ -427,13 +504,10 @@ export default function RequestPage() {
           <input placeholder="Request title *" value={form.title}
                  onChange={(e) => setForm({ ...form, title: e.target.value })}
                  className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
-          <input placeholder="Finish (optional — e.g. RAL 7016)" value={form.finish}
-                 onChange={(e) => setForm({ ...form, finish: e.target.value })}
-                 className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
           <input placeholder="Site location (optional)" value={form.site}
                  onChange={(e) => setForm({ ...form, site: e.target.value })}
                  className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
-          <input placeholder="Deadline (e.g. within 6 weeks) *" value={form.required_raw}
+          <input placeholder="Deadline — optional (we estimate completion for you)" value={form.required_raw}
                  onChange={(e) => setForm({ ...form, required_raw: e.target.value })}
                  className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
         </div>
