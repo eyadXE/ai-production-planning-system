@@ -105,9 +105,8 @@ function CatalogInner() {
     try {
       const out = await api("/intake/start", { method: "POST" });
       if (!out.llm) {
-        cPush("assistant",
-          "The smart assistant is offline right now. Please use the custom " +
-          "object form below (name + description + photo) instead.");
+        setChatOpen(false);
+        setError("The smart assistant is offline right now — press 'Describe it to the assistant' again in a moment.");
         return;
       }
       setChatSession(out.session_id);
@@ -175,7 +174,7 @@ function CatalogInner() {
 
   return (
     <AppShell active="Services" title="Ousus services"
-              subtitle="Browse what we fabricate, add to your request, or describe something custom.">
+              subtitle="Add catalog products to your request — or describe something custom to the assistant.">
       <div className="flex flex-wrap gap-2">
         {catalogs.map((c) => (
           <a key={c.url} href={c.url} target="_blank" rel="noreferrer"
@@ -262,34 +261,6 @@ function CatalogInner() {
           </div>
         )}
 
-        {!chatOpen && !chatDone && (
-          <details className="mt-3">
-            <summary className="cursor-pointer font-mono text-[11px] text-muted-foreground hover:text-primary">
-              …or fill the custom object form manually
-            </summary>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <input placeholder="Name (e.g. Spiral staircase)" value={customDraft.name}
-                     onChange={(e) => setCustomDraft({ ...customDraft, name: e.target.value })}
-                     className="border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
-              <label className="flex cursor-pointer items-center justify-center gap-2 border border-dashed border-border px-3 py-2.5 font-mono text-[11px] text-muted-foreground hover:border-primary">
-                <Upload className="size-3.5" />
-                {uploading ? "Uploading…" : customDraft.photo ? "Photo attached ✓" : "Attach reference photo"}
-                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
-                       onChange={(e) => uploadPhoto(e.target.files?.[0])} disabled={uploading} />
-              </label>
-              <textarea placeholder="Description — dimensions, material, anything useful"
-                        value={customDraft.description}
-                        onChange={(e) => setCustomDraft({ ...customDraft, description: e.target.value })}
-                        rows={2}
-                        className="sm:col-span-2 border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
-            </div>
-            <button disabled={!customDraft.name || uploading}
-                    onClick={() => { setCustom([...custom, customDraft]); setCustomDraft({ name: "", description: "", photo: "" }); }}
-                    className="mt-3 border border-primary/50 px-4 py-2 font-mono text-xs text-primary hover:bg-primary/10 disabled:opacity-40">
-              + Add custom object to request
-            </button>
-          </details>
-        )}
       </section>
 
       <section className="border border-border bg-card p-5">
