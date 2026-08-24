@@ -106,6 +106,9 @@ class Project(Base):
     stage: Mapped[str] = mapped_column(String(32))  # enquiry .. closed
     status: Mapped[str] = mapped_column(String(24))  # on_track | overdue | blocked_material
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    release_status: Mapped[str] = mapped_column(
+        String(16), default="na"
+    )  # na | queued | released | rejected
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     account: Mapped["Account"] = relationship(back_populates="projects")
@@ -122,6 +125,7 @@ class StageEvent(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
     stage: Mapped[str] = mapped_column(String(32))
     started_at: Mapped[date] = mapped_column(Date)
+    planned_finish_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     finished_at: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="stage_events")

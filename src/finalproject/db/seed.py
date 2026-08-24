@@ -130,6 +130,9 @@ def load_projects(session, account_ids: dict[str, int], spec_ids: dict[str, int]
                 project_id=p.id,
                 stage=r["stage"],
                 started_at=datetime.strptime(r["stage_started"], "%Y-%m-%d").date(),
+                planned_finish_at=datetime.strptime(
+                    r["planned_stage_finish"], "%Y-%m-%d"
+                ).date(),
                 finished_at=None,
             )
         )
