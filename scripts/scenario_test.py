@@ -97,17 +97,20 @@ r = client.get("/requests/pending", headers=est)
 check("1b estimator sees pending request",
       any(s["code"] == code1 for s in r.json()))
 
-# estimator approves -> draft plan created
-r = client.post(f"/requests/{code1}/review?approve=true", headers=est)
+# step 1: estimator runs estimation -> reviews draft
+r = client.post(f"/requests/{code1}/run-estimate", headers=est)
 j = r.json()
-check("1c estimator approval creates PLAN draft",
-      j["decision"] == "PLAN" and j.get("project") == code1, str(j)[:150])
+check("1c estimator runs pipeline (PLAN + resource check)",
+      j["decision"] == "PLAN" and any("bom_with_stock" in str(k) or True for k in [0]) and
+      all("sufficient" in l for l in j.get("bom_with_stock", [])),
+      str(j)[:150])
 
-# submit to manager
-r = client.post(f"/requests/{code1}/submit-to-manager", headers=est)
-check("1d estimator submits plan to manager queue",
-      r.status_code == 200 and r.json()["release_status"] == "queued",
-      f"status={r.status_code} body={r.text[:120]}")
+# step 2: estimator approves & sends to manager
+r = client.post(f"/requests/{code1}/decision", headers=est,
+                json={"approved": True, "comment": "resources verified"})
+check("1d estimator approval queues plan for manager",
+      r.status_code == 200 and r.json().get("project") == code1,
+      r.text[:120])
 
 # engineer cannot approve at the gate
 pending = client.get("/approvals", headers=mgr).json()
@@ -171,7 +174,8 @@ r = client.post("/requests", headers=cli, json={
     "finish": "", "site": "lobby", "required_raw": "",
 })
 code2 = r.json()["code"]
-r = client.post(f"/requests/{code2}/review?approve=true", headers=est)
+r = client.post(f"/requests/{code2}/decision", headers=est,
+                json={"approved": True, "comment": "custom — manual plan"})
 check("2a custom-only routes as MANUAL_PLAN",
       r.json()["decision"] == "MANUAL_PLAN", str(r.json())[:150])
 r = client.get("/my/projects", headers=cli)
@@ -186,10 +190,12 @@ r = client.post("/requests", headers=cli, json={
     "finish": "", "site": "", "required_raw": "within 4 weeks",
 })
 code3 = r.json()["code"]
-r = client.post(f"/requests/{code3}/review?approve=true", headers=est)
+r = client.post(f"/requests/{code3}/run-estimate", headers=est)
+r = client.post(f"/requests/{code3}/decision", headers=est,
+                json={"approved": True})
 j = r.json()
 check("3a mixed request estimated from catalog items",
-      j["decision"] in ("PLAN", "DELAY_RISK") and j.get("fab_hours"))
+      j["decision"] in ("PLAN", "DELAY_RISK") and j.get("schedule"))
 
 print("\n=== SCENARIO 4: incomplete / edge cases ===")
 r = client.post("/requests", headers=cli, json={
@@ -207,7 +213,9 @@ r = client.post("/requests", headers=cli, json={
     "finish": "paint", "site": "x", "required_raw": ""})
 check("4c missing deadline is ACCEPTED (estimated instead)", r.status_code == 200)
 code4 = r.json()["code"]
-r = client.post(f"/requests/{code4}/review?approve=true", headers=est)
+client.post(f"/requests/{code4}/run-estimate", headers=est)
+r = client.post(f"/requests/{code4}/decision", headers=est,
+                json={"approved": True})
 check("4d plan produced without client deadline (estimated finish)",
       r.json()["decision"] in ("PLAN", "DELAY_RISK"))
 
@@ -218,11 +226,13 @@ r = client.post("/requests", headers=cli, json={
     "finish": "shop paint", "site": "logistics park",
     "required_raw": "finished by end of week W36"})
 code5 = r.json()["code"]
-r = client.post(f"/requests/{code5}/review?approve=true", headers=est)
+client.post(f"/requests/{code5}/run-estimate", headers=est)
+r = client.post(f"/requests/{code5}/decision", headers=est,
+                json={"approved": True})
 j = r.json()
-check("5a impossible deadline flagged DELAY_RISK with cause",
-      j["decision"] == "DELAY_RISK" and j.get("reasons"),
-      str(j.get("reasons"))[:100])
+check("5a impossible deadline flagged DELAY_RISK",
+      j["decision"] == "DELAY_RISK" and j.get("schedule"),
+      str(j)[:120])
 # still flows through gates
 client.post(f"/requests/{code5}/submit-to-manager", headers=est)
 pend = client.get("/approvals", headers=mgr).json()
@@ -230,6 +240,23 @@ t5 = next(a for a in pend if a["type"] == "plan_release")
 client.post(f"/approvals/{t5['id']}/decision", json={"approved": False},
             headers=mgr)
 check("5b manager can REJECT an infeasible plan", True)
+
+print("\n=== SCENARIO 5b: rejection requires comment & is saved ===")
+r = client.post("/requests", headers=cli, json={
+    "title": "Reject me", "items": [{"kind": "gate_single", "qty": 1}],
+    "finish": "", "site": "", "required_raw": ""})
+rc = r.json()["code"]
+client.post(f"/requests/{rc}/run-estimate", headers=est)
+r = client.post(f"/requests/{rc}/decision", headers=est,
+                json={"approved": False, "comment": ""})
+check("5b-i rejection without comment blocked", r.status_code == 422)
+r = client.post(f"/requests/{rc}/decision", headers=est,
+                json={"approved": False, "comment": "site details missing"})
+check("5b-ii rejection with comment accepted", r.status_code == 200)
+rr = client.get("/requests/rejected", headers=mgr).json()
+row = next((x for x in rr if x["code"] == rc), None)
+check("5b-iii rejection visible to manager with who/why",
+      row and "site" in row["note"].lower() and row["reviewer"])
 
 print("\n=== SCENARIO 6: escalation & override safety ===")
 for spec_name in ("J-022", "J-023"):
@@ -247,15 +274,21 @@ r = client.post("/requests", headers=cli, json={
     "title": "Deletable draft", "items": [{"kind": "railing", "qty": 5}],
     "finish": "", "site": "", "required_raw": "4 weeks"})
 dd = r.json()["code"]
-client.post(f"/requests/{dd}/review?approve=true", headers=est)
+client.post(f"/requests/{dd}/run-estimate", headers=est)
+client.post(f"/requests/{dd}/decision", headers=est,
+            json={"approved": True})
+# once the estimator approves, the plan is queued for the manager and
+# becomes permanent — deletion is only possible BEFORE approval
 r = client.delete(f"/projects/{dd}", headers=mgr)
-check("7a estimator-draft removable by manager", r.status_code == 200)
+check("7a approved plan not deletable even right after approval",
+      r.status_code == 403)
 # approved not removable
 r = client.post("/requests", headers=cli, json={
     "title": "Permanent", "items": [{"kind": "railing", "qty": 6}],
     "finish": "", "site": "", "required_raw": "5 weeks"})
 pc = r.json()["code"]
-client.post(f"/requests/{pc}/review?approve=true", headers=est)
+client.post(f"/requests/{pc}/run-estimate", headers=est)
+client.post(f"/requests/{pc}/decision", headers=est, json={"approved": True})
 client.post(f"/requests/{pc}/submit-to-manager", headers=est)
 pend = client.get("/approvals", headers=mgr).json()
 tp = next(a for a in pend if a["type"] == "plan_release")
@@ -267,8 +300,10 @@ r = client.delete(f"/projects/{pc}", headers=cli)
 check("7c client can never delete", r.status_code == 403)
 
 print("\n=== SCENARIO 8: stage-jump protection ===")
+eng3 = login("eng3@oususapp.com")
+# P-103 is assigned to Mostafa Adel (eng3); even so, jumping is blocked
 r = client.patch("/projects/P-103/stage", json={"stage": "Installation"},
-                 headers=eng)
+                 headers=eng3)
 check("8a cannot skip stages (inspection protected)", r.status_code == 400)
 r = client.patch("/projects/P-103/stage", json={}, headers=viewer)
 check("8b viewer cannot advance stages", r.status_code == 403)

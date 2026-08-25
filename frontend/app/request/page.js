@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { FileDown, MessageSquare, Paperclip, Trash2 } from "lucide-react";
+import { FileDown, MessageSquare, Paperclip, Plus, Trash2 } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { api, getUser } from "../../lib/api";
 import { addCustom, addItem, clearCart, getCart, removeLine, setQty } from "../../lib/cart";
@@ -11,6 +11,7 @@ export default function RequestPage() {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState("catalog");
+  const chatBoxRef = useRef(null);
 
   // catalog
   const [catalog, setCatalog] = useState(null);

@@ -107,10 +107,11 @@ def load_specs(session, account_ids: dict[str, int]) -> dict[str, int]:
 
 def load_projects(session, account_ids: dict[str, int], spec_ids: dict[str, int]) -> None:
     rows = json.loads((DATA_DIR / "projects_in_progress.json").read_text())
+
     accounts = {a.code: a for a in session.scalars(select(Account))}
     name_to_code = {a.name: a.code for a in accounts.values()}
     fallback_account = next(iter(account_ids.values()))
-    for r in rows:
+    for i, r in enumerate(rows):
         acc_code = name_to_code.get(r["client"])
         p = Project(
             code=r["project_id"],
@@ -123,6 +124,9 @@ def load_projects(session, account_ids: dict[str, int], spec_ids: dict[str, int]
                 r["planned_stage_finish"], "%Y-%m-%d"
             ).date(),
         )
+        # round-robin assignment so the timeline/board show owners
+        p.assigned_engineer_id = (i % 3) + 2
+        # realistic estimated finishes within the capacity window  # user ids 2,3 = engineers
         session.add(p)
         session.flush()
         session.add(

@@ -1,124 +1,159 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Hammer } from "lucide-react";
+import Link from "next/link";
+import { Gauge, Hammer } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { api } from "../../lib/api";
 
 export default function Review() {
   const [items, setItems] = useState([]);
+  const [rejected, setRejected] = useState([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [results, setResults] = useState({});
-  const [decisionLog, setDecisionLog] = useState([]);
+  const [draft, setDraft] = useState(null);      // ran-estimate result
+  const [comment, setComment] = useState("");
 
   const load = useCallback(async () => {
-    try { setItems(await api("/requests/pending")); } catch (e) { setError(e.message); }
+    try {
+      setItems(await api("/requests/pending"));
+      setRejected(await api("/requests/rejected"));
+    } catch (e) { setError(e.message); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  async function review(code, approve) {
+  async function runEstimate(code) {
+    setBusy(code); setError(""); setDraft(null);
+    try {
+      const r = await api(`/requests/${code}/run-estimate`, { method: "POST" });
+      r.code = code;
+      setDraft(r);
+    } catch (e) { setError(e.message); } finally { setBusy(""); }
+  }
+
+  async function decide(code, approved) {
+    if (!approved && !comment.trim()) {
+      setError("a rejection requires a comment explaining why");
+      return;
+    }
     setBusy(code); setError("");
     try {
-      const r = await api(`/requests/${code}/review?approve=${approve}`, { method: "POST" });
-      setResults((p) => ({ ...p, [code]: r }));
-      setDecisionLog((prev) => [{
-        code, decision: r.decision, key_clause: r.key_clause,
-        reasons: r.reasons || [], fab_hours: r.fab_hours,
-        install_hours: r.install_hours, price: r.final_price_egp,
-        approval_id: r.approval_id,
-      }, ...prev]);
+      await api(`/requests/${code}/decision`, {
+        method: "POST", body: { approved, comment },
+      });
+      setComment(""); setDraft(null);
       await load();
     } catch (e) { setError(e.message); } finally { setBusy(""); }
   }
 
   return (
     <AppShell active="Requests" title="Engineering review"
-              subtitle="Client requests waiting to enter the planning phase.">
+              subtitle="Run the estimation on client requests, review the plan against our resources, then approve or reject with a reason.">
       {error && <div className="text-destructive">{error}</div>}
 
-      {decisionLog.length > 0 && (
-        <section>
-          <h3 className="mb-3 mt-2 font-mono text-sm font-bold uppercase tracking-wider text-muted-foreground">Decisions this session</h3>
-          {decisionLog.map((d) => (
-            <div key={d.code} className="mb-3 border border-border bg-card p-4">
-              <b className="font-mono text-xs text-foreground">{d.code} — Decision: {d.decision}</b>
-              <span className="ml-2 border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">clause {d.key_clause}</span>
-              {d.fab_hours != null && (
-                <span className="ml-2 font-mono text-[10px] text-muted-foreground">
-                  {d.fab_hours} h fab · {d.install_hours} h install
-                  {d.price ? ` · EGP ${Number(d.price).toLocaleString()}` : ""}
-                  {d.approval_id ? ` · gate #${d.approval_id}` : ""}
-                </span>
-              )}
-              <ul className="mt-1 list-disc pl-5 font-mono text-[10px] leading-5 text-muted-foreground">
-                {d.reasons.map((r, i) => <li key={i}>{r}</li>)}
-              </ul>
-            </div>
-          ))}
-        </section>
-      )}
-
-      {items.length === 0 && (
-        <div className="border border-border bg-card p-5 font-mono text-xs text-muted-foreground">No requests waiting for review.</div>
-      )}
-      <div className="flex flex-col gap-4">
+      <section>
+        <h3 className="mb-3 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          Pending · {items.length}</h3>
+        {items.length === 0 && (
+          <div className="border border-border bg-card p-5 font-mono text-xs text-muted-foreground">No pending requests.</div>
+        )}
         {items.map((s) => (
-          <section key={s.code} className="border border-border bg-card p-5">
+          <div key={s.code} className="mb-4 border border-border bg-card p-5">
             <div className="flex items-center gap-3">
               <Hammer className="size-4 text-primary" />
               <b className="font-mono text-sm text-foreground">{s.code} — {s.title}</b>
               <span className="ml-auto border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{s.account}</span>
             </div>
-            <table className="mt-3 w-full border-collapse">
-              <tbody>
-                {(s.structured?.items || []).map((it, i) => (
-                  <tr key={i} className="border-b border-border last:border-0">
-                    <th className="py-1.5 pr-4 text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{it.kind}</th>
-                    <td className="py-1.5 font-mono text-xs text-foreground">{it.qty}{it.note ? ` (${it.note})` : ""}</td>
-                  </tr>
-                ))}
-                {[["Finish", s.structured?.finish || "unstated"], ["Site", s.structured?.site || "—"], ["Required", s.structured?.required_raw]].map(([k, v]) => (
-                  <tr key={k} className="border-b border-border last:border-0">
-                    <th className="py-1.5 pr-4 text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{k}</th>
-                    <td className="py-1.5 font-mono text-xs text-muted-foreground">{v}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
 
-            {results[s.code] && (
-              <div className="mt-3 border border-border bg-background p-4">
-                <b className="font-mono text-xs text-foreground">Decision: {results[s.code].decision}</b>
-                {results[s.code].fab_hours != null && (
-                  <p className="mt-2 font-mono text-[11px] text-muted-foreground">
-                    {results[s.code].fab_hours} h fab / {results[s.code].install_hours} h install
-                    {results[s.code].final_price_egp ? ` · EGP ${Number(results[s.code].final_price_egp).toLocaleString()}` : ""}
-                    {" · "}approval #{results[s.code].approval_id ?? "—"}
-                  </p>
+            {!draft || draft.code !== s.code ? (
+              <button onClick={() => runEstimate(s.code)} disabled={busy === s.code}
+                      className="mt-3 flex items-center gap-2 bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">
+                <Gauge className="size-4" />{busy === s.code ? "Running pipeline…" : "Run estimation"}
+              </button>
+            ) : (
+              <>
+                {/* plan review */}
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="border border-border bg-background p-4">
+                    <b className="font-mono text-xs text-primary">Plan summary</b>
+                    <table className="mt-2 w-full border-collapse">
+                      <tbody>
+                        <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Decision</td><td className="font-mono text-xs">{draft.decision} · clause {draft.key_clause}</td></tr>
+                        <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Fabrication</td><td className="font-mono text-xs">{draft.fab_hours} h</td></tr>
+                        <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Installation</td><td className="font-mono text-xs">{draft.install_hours} h</td></tr>
+                        <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Material cost</td><td className="font-mono text-xs">EGP {Number(draft.material_cost_egp || 0).toLocaleString()}</td></tr>
+                        <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Quoted price</td><td className="font-mono text-xs">EGP {Number(draft.final_price_egp || 0).toLocaleString()}</td></tr>
+                        {draft.schedule && <>
+                          <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Starts</td><td className="font-mono text-xs">{draft.schedule.start_week}</td></tr>
+                          <tr><td className="py-1 pr-3 font-mono text-[10px] uppercase text-muted-foreground">Est. completion</td><td className="font-mono text-xs">{draft.schedule.planned_finish}</td></tr>
+                        </>}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="border border-border bg-background p-4">
+                    <b className="font-mono text-xs text-primary">Resource check — materials vs stock</b>
+                    {(draft.bom_with_stock || []).length === 0 && (
+                      <p className="mt-2 font-mono text-[11px] text-muted-foreground">No material lines.</p>
+                    )}
+                    <table className="mt-2 w-full border-collapse">
+                      <tbody>
+                        {(draft.bom_with_stock || []).map((l, i) => (
+                          <tr key={i} className="border-b border-border last:border-0">
+                            <td className="py-1 pr-3 font-mono text-xs text-foreground">{l.code}</td>
+                            <td className="py-1 font-mono text-xs text-muted-foreground">need {l.qty}</td>
+                            <td className={`py-1 font-mono text-xs ${l.sufficient ? "text-chart-2" : "text-destructive"}`}>
+                              stock {l.stock}{!l.sufficient && " ⚠"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {(draft.reasons || []).length > 0 && (
+                  <ul className="mt-3 list-disc pl-5 font-mono text-[11px] leading-5 text-muted-foreground">
+                    {draft.reasons.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
                 )}
-                <ul className="mt-2 list-disc pl-5 font-mono text-[11px] leading-6 text-muted-foreground">
-                  {(results[s.code].reasons || []).map((r, i) => <li key={i}>{r}</li>)}
-                </ul>
-              </div>
-            )}
 
-            {!results[s.code] && (
-              <div className="mt-4 flex gap-2">
-                <button disabled={busy === s.code} onClick={() => review(s.code, true)}
-                        className="bg-primary px-4 py-2 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                  Approve & send plan to manager
-                </button>
-                <button disabled={busy === s.code} onClick={() => review(s.code, false)}
-                        className="border border-destructive/40 px-4 py-2 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">
-                  Reject
-                </button>
-              </div>
+                <label className="mb-1 mt-4 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Comment (required on rejection)</label>
+                <input value={comment} onChange={(e) => setComment(e.target.value)}
+                       placeholder="e.g. capacity confirmed / missing site details"
+                       className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+                <div className="mt-3 flex gap-2">
+                  <button onClick={() => decide(s.code, true)} disabled={!!busy}
+                          className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">
+                    Approve &amp; send to manager
+                  </button>
+                  <button onClick={() => decide(s.code, false)} disabled={!!busy}
+                          className="border border-destructive/40 px-4 py-2.5 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">
+                    Reject
+                  </button>
+                </div>
+              </>
             )}
-          </section>
+          </div>
         ))}
-      </div>
+      </section>
+
+      <section>
+        <h3 className="mb-3 font-mono text-sm font-bold text-destructive">
+          Rejected requests — permanent record</h3>
+        {rejected.length === 0 && (
+          <div className="border border-border bg-card p-5 font-mono text-xs text-muted-foreground">None.</div>
+        )}
+        {rejected.map((r) => (
+          <div key={r.code} className="mb-3 border border-border bg-card p-4">
+            <b className="font-mono text-xs text-foreground">{r.code} — {r.title}</b>
+            <span className="ml-2 border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{r.account}</span>
+            <p className="mt-1 font-mono text-[11px] text-destructive">Reason: {r.note || "—"}</p>
+            <p className="font-mono text-[10px] text-muted-foreground">Reviewed by {r.reviewer}</p>
+          </div>
+        ))}
+      </section>
     </AppShell>
   );
 }

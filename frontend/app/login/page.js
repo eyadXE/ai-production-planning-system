@@ -39,9 +39,10 @@ function LoginInner() {
           };
       const out = await api(path, { method: "POST", body });
       setSession(out.access_token, out.user);
-      router.push(out.user.role === "client"
-        ? (mode === "signup" ? "/request" : "/my")
-        : "/summary");
+      const land = { client: (mode === "signup" ? "/request" : "/my"),
+                     estimator: "/review", engineer: "/my-assignments",
+                     manager: "/summary", viewer: "/board" };
+      router.push(land[out.user.role] || "/board");
     } catch (err) {
       setError(err.message);
     } finally { setBusy(false); }

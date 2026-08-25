@@ -137,6 +137,9 @@ def estimate_spec(code: str,
 def board(user: User = Depends(require_roles("estimator", "engineer", "manager", "viewer")),
           session: Session = Depends(get_session)):
     projects = session.scalars(select(Project)).all()
+    if user.role == "engineer":
+        # project engineers see ONLY what they are assigned to
+        projects = [p for p in projects if p.assigned_engineer_id == user.id]
     columns = {s: [] for s in STAGES}
     for p in projects:
         ev = tracking.current_event(session, p)
@@ -168,6 +171,10 @@ def advance(code: str, body: StageIn,
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
         raise HTTPException(404, f"project {code} not found")
+    # tier-2 engineer may only advance THEIR assigned projects
+    if user.role == "engineer" and project.assigned_engineer_id != user.id:
+        raise HTTPException(403,
+            "this project is assigned to another engineer")
     try:
         project = tracking.advance_stage(session, project, body.stage)
     except tracking.TrackingError as exc:

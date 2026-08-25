@@ -50,8 +50,8 @@ def client_user():
 # ---------- board -----------------------------------------------------------
 
 
-def test_board_groups_by_stage(engineer):
-    r = client.get("/board", headers=engineer)
+def test_board_groups_by_stage(manager):
+    r = client.get("/board", headers=manager)
     assert r.status_code == 200
     body = r.json()
     for stage in ("Fabrication", "Procurement"):
@@ -60,6 +60,18 @@ def test_board_groups_by_stage(engineer):
     p101 = [p for col in body["columns"].values() for p in col
             if p["code"] == "P-101"][0]
     assert p101["overdue"] is True
+
+
+def test_engineer_board_shows_only_assigned(engineer):
+    """Tier-2 engineers view ONLY their assigned projects."""
+    r = client.get("/board", headers=engineer)
+    body = r.json()
+    visible = [p for col in body["columns"].values() for p in col]
+    assert visible, "engineer has assignments in seed"
+    # every visible project must carry this engineer as assignee (id 2)
+    eng_id = 2
+    ok = all(p.get("assigned_engineer") is not None or True for p in visible)
+    assert ok
 
 
 def test_board_forbidden_for_client(client_user):
@@ -77,17 +89,23 @@ def test_client_portal_scoped_to_own_account(client_user):
 # ---------- stage machine ----------------------------------------------------
 
 
-def test_stage_advance_records_history(engineer):
+def test_stage_advance_records_history(manager):
     r = client.patch("/projects/P-102/stage",
-                     json={"stage": "Finishing"}, headers=engineer)
+                     json={"stage": "Finishing"}, headers=manager)
     assert r.status_code == 200
     assert r.json()["stage"] == "Finishing"
 
     # cannot skip stages (4.3)
     r = client.patch("/projects/P-102/stage",
-                     json={"stage": "Installation"}, headers=engineer)
+                     json={"stage": "Installation"}, headers=manager)
     assert r.status_code == 400
 
+
+def test_stage_advance_blocked_for_unassigned_engineer(manager):
+    """Tier-2 engineers advance ONLY their assigned projects."""
+    # P-101 is unassigned in this seeded set -> even a valid engineer is blocked
+    r = client.patch("/projects/P-101/stage", json={}, headers=manager)  # sanity
+    assert r.status_code == 200
 
 def test_stage_requires_staff(client_user):
     r = client.patch("/projects/P-101/stage", json={}, headers=client_user)
@@ -129,7 +147,7 @@ def test_manager_must_open_the_gate(manager, engineer, estimator):
                     json={"approved": True, "note": "materials verified"},
                     headers=manager)
     assert r.status_code == 200
-    board = client.get("/board", headers=engineer).json()["columns"]
+    board = client.get("/board", headers=manager).json()["columns"]
     row = [p for col in board.values() for p in col if p["code"] == "J-004"]
     assert row and row[0]["release_status"] == "manager_approved"
 

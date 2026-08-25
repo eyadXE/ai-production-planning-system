@@ -89,6 +89,7 @@ class Spec(Base):
     status: Mapped[str] = mapped_column(
         String(24), default="approved"
     )  # draft | pending_review | info_requested | approved | rejected
+    rejection_note: Mapped[str] = mapped_column(Text, default="")
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     account: Mapped["Account"] = relationship()

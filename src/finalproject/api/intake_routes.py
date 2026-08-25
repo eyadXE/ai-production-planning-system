@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from finalproject.auth.dependencies import get_current_user, require_roles
 from finalproject.db.database import get_session
-from finalproject.db.models import Estimate, Project, Spec, StageEvent, User
+from finalproject.db.models import Account, Estimate, Material, Project, Spec, StageEvent, User
 from finalproject.engine.estimator import estimate as run_estimate
-from finalproject.engine.parser import parse_spec
+from finalproject.engine.parser import Item, parse_deadline, parse_spec
 from finalproject.tracking import approvals as approvals_svc
 from finalproject.tracking.notify import send_email
 
@@ -40,6 +40,11 @@ class CustomItem(BaseModel):
     name: str
     description: str = ""
     photo: str = ""          # /uploads/xx.png from the upload endpoint
+
+
+class EstimatorDecision(BaseModel):
+    approved: bool
+    comment: str = ""
 
 
 class RequestIn(BaseModel):
@@ -171,62 +176,100 @@ def pending_requests(user: User = Depends(require_roles("estimator", "manager"))
     return out
 
 
-@router.post("/requests/{code}/review")
-def review_request(code: str, approve: bool,
-                   user: User = Depends(require_roles("estimator", "manager")),
-                   session: Session = Depends(get_session)):
-    """Engineer gate: approve moves the request into the planning phase."""
+@router.post("/requests/{code}/run-estimate")
+def run_estimate_endpoint(code: str,
+                          user: User = Depends(require_roles("estimator", "manager")),
+                          session: Session = Depends(get_session)):
+    """Step 1 — estimator runs the pipeline and reviews the draft plan."""
     spec = session.scalar(select(Spec).where(Spec.code == code))
-    if not spec:
-        raise HTTPException(404, f"request {code} not found")
-    if spec.status != "pending_review":
-        raise HTTPException(409, f"request already '{spec.status}'")
+    if not spec or spec.status != "pending_review":
+        raise HTTPException(404 if not spec else 409,
+                            f"request {code} not pending" if spec else f"{code} not found")
 
-    if not approve:
-        spec.status = "rejected"
-        spec.reviewed_by = user.id
-        session.commit()
-        return {"code": code, "status": "rejected"}
-
-    spec.status = "approved"
-    spec.reviewed_by = user.id
-
-    structured = spec.structured_json or {}
-    custom = structured.get("custom") or []
-
-    # planning phase — same deterministic pipeline as file specs
     parsed = parse_spec(spec.raw_text)
     parsed.account_id = _account_code(session, spec.account_id)
-    # merge chat-structured items so nothing depends on raw-text parsing
+    structured = spec.structured_json or {}
     if structured:
         from finalproject.engine.parser import Item
-
+        from finalproject.engine.rates import WEEKLY_CAPACITY_DEFAULT as _W
         parsed.items = [
             Item(i["kind"], float(i["qty"]), i.get("note", ""))
             for i in structured.get("items") or []
         ]
         parsed.finish = structured.get("finish") or ""
         parsed.site = structured.get("site") or ""
-        deadline = parse_spec(spec.raw_text).deadline  # via Required line
-        if spec.structured_json.get("required_raw"):
+        if structured.get("required_raw"):
             base = parsed.spec_date or date.today()
-            from finalproject.engine.parser import parse_deadline
-
-            d = parse_deadline(spec.structured_json["required_raw"], base)
-            parsed.deadline = d or parsed.deadline
+            parsed.deadline = (parse_deadline(structured["required_raw"], base)
+                               or parsed.deadline)
         missing = []
-        if not parsed.items and not custom:
+        if not parsed.items and not structured.get("custom"):
             missing.append("item dimensions/quantities")
-        # finish & deadline are OPTIONAL on client requests — the estimator
-        # plans them (clients can't add finish data per requirements)
-        # deadline is optional — the platform computes the estimated
-        # completion itself; client's date only drives DELAY_RISK
         parsed.missing = missing
+        if structured.get("custom") and not structured.get("items"):
+            # manual-plan path handled at decision time
+            pass
 
-    # Custom-only requests can't be auto-estimated by the rate handbook —
-    # they go straight to the board for manual engineering planning.
+    materials = session.scalars(select(Material)).all()
+    stock_map = {m.code: m.stock_qty for m in materials}
+
+    result = run_estimate(session, spec.raw_text, parsed)
+
+    # resource check: required vs available per line
+    resource_lines = []
+    for l in result.bom_lines:
+        resource_lines.append({**l, "stock": stock_map.get(l["code"], 0),
+                               "sufficient": stock_map.get(l["code"], 0) >= l["qty"]})
+
+    return {
+        "code": code, "title": spec.title,
+        "decision": result.decision, "key_clause": result.key_clause,
+        "reasons": result.reasons, "fab_hours": result.fab_hours,
+        "install_hours": result.install_hours,
+        "final_price_egp": result.final_price_egp,
+        "material_cost_egp": result.material_cost_egp,
+        "schedule": result.schedule,
+        "bom_with_stock": resource_lines,
+        "shortages": result.shortages if hasattr(result, "shortages") else [],
+        "citations": result.citations,
+        "estimated_finish": (result.schedule or {}).get("planned_finish"),
+    }
+
+
+@router.post("/requests/{code}/decision")
+def decide_request(code: str, body: EstimatorDecision,
+                   user: User = Depends(require_roles("estimator", "manager")),
+                   session: Session = Depends(get_session)):
+    """Step 2 — estimator approves (with optional comment) or rejects
+    (comment REQUIRED). Rejections are saved permanently for the manager."""
+    spec = session.scalar(select(Spec).where(Spec.code == code))
+    if not spec:
+        raise HTTPException(404, f"request {code} not found")
+    if spec.status != "pending_review":
+        raise HTTPException(409, f"request already '{spec.status}'")
+
+    comment = (body.comment or "").strip()
+    if not body.approved and not comment:
+        raise HTTPException(422, "a rejection requires a comment explaining why")
+
+    if not body.approved:
+        spec.status = "rejected"
+        spec.rejection_note = comment
+        spec.reviewed_by = user.id
+        session.commit()
+        return {"code": code, "status": "rejected", "note": comment}
+
+    spec.status = "approved"
+    spec.rejection_note = ""
+    spec.reviewed_by = user.id
+    structured = spec.structured_json or {}
+    custom = structured.get("custom") or []
+
     project_code = None
-    if structured.get("custom") and not structured.get("items"):
+    release_status = None
+
+    if custom and not structured.get("items"):
+        # manual plan path
         project_code = _create_project_from_spec(session, spec)
         proj_row = session.scalar(select(Project).where(Project.code == project_code))
         if proj_row:
@@ -234,73 +277,101 @@ def review_request(code: str, approve: bool,
         if account_has_client(session, spec.account_id):
             send_email(session, spec.account_id, "custom_manual_plan",
                        {"code": spec.code, "title": spec.title})
-        return {
-            "code": spec.code, "status": spec.status,
-            "decision": "MANUAL_PLAN",
-            "reasons": ["Contains custom object(s) — routed to engineers "
-                        "for a manual plan (rate handbook does not apply)."],
-            "project": project_code,
-        }
+        release_status = "draft"
+        session.commit()
+        return {"code": code, "status": "approved",
+                "decision": "MANUAL_PLAN", "project": project_code}
+
+    parsed = parse_spec(spec.raw_text)
+    parsed.account_id = _account_code(session, spec.account_id)
+    if structured:
+        from finalproject.engine.parser import Item
+        parsed.items = [Item(i["kind"], float(i["qty"]), i.get("note", ""))
+                        for i in structured.get("items") or []]
+        parsed.finish = structured.get("finish") or ""
+        parsed.site = structured.get("site") or ""
+        if structured.get("required_raw"):
+            base = parsed.spec_date or date.today()
+            parsed.deadline = (parse_deadline(structured["required_raw"], base)
+                               or parsed.deadline)
+        # finish/deadline optional on client requests
+        missing = []
+        if not parsed.items and not custom:
+            missing.append("item dimensions/quantities")
+        parsed.missing = missing
 
     result = run_estimate(session, spec.raw_text, parsed)
 
-    project = None
-    if result.decision in ("PLAN", "DELAY_RISK"):
-        required = parsed.deadline
-        project = Project(
-            code=spec.code,
-            account_id=spec.account_id,
-            spec_id=spec.id,
-            title=spec.title or spec.code,
-            stage="Production Planning",
-            status="on_track",
-            required_date=required,
-            release_status="queued",
-        )
-        session.add(project)
-        session.flush()
-        est = Estimate(
-            project_id=project.id, version=1, decision=result.decision,
-            material_cost_egp=result.material_cost_egp or 0.0,
-            consumables_egp=result.consumables_egp or 0.0,
-            fab_hours=result.fab_hours or 0.0,
-            install_hours=result.install_hours or 0.0,
-            labour_cost_egp=result.labour_cost_egp or 0.0,
-            margin_applied=result.margin_applied or 0.0,
-            final_price_egp=result.final_price_egp or 0.0,
-            citations_json={"citations": result.citations,
-                            "reasons": result.reasons,
-                            "schedule": result.schedule},
-            created_by=user.id,
-        )
-        if result.schedule and result.schedule.get("planned_finish"):
-            from datetime import date as _d
+    if result.decision not in ("PLAN", "DELAY_RISK"):
+        spec.status = "rejected"
+        spec.rejection_note = "; ".join(result.reasons)[:500]
+        session.commit()
+        return {"code": code, "status": "rejected",
+                "decision": result.decision, "reasons": result.reasons}
 
-            project.estimated_finish = _d.fromisoformat(
-                result.schedule["planned_finish"])
-        if result.schedule and result.schedule.get("planned_finish"):
-            from datetime import date as _d
-            project.estimated_finish = _d.fromisoformat(
-                result.schedule["planned_finish"])
-        project.release_status = "draft"
-        session.add(est)
-        session.flush()
-        # stays as estimator DRAFT until they submit it to the manager
-        if account_has_client(session, spec.account_id):
-            send_email(session, spec.account_id, "spec_approved",
-                       {"code": spec.code, "title": spec.title})
+    required = parsed.deadline
+    project = Project(
+        code=spec.code, account_id=spec.account_id, spec_id=spec.id,
+        title=spec.title or spec.code, stage="Production Planning",
+        status="on_track", required_date=required, release_status="queued",
+    )
+    if result.schedule and result.schedule.get("planned_finish"):
+        from datetime import date as _d
+        project.estimated_finish = _d.fromisoformat(
+            result.schedule["planned_finish"])
+    session.add(project)
+    session.flush()
 
-    session.commit()
-    session.refresh(spec)
-    return {
-        "code": spec.code, "status": spec.status,
-        "decision": result.decision, "key_clause": result.key_clause,
-        "reasons": result.reasons, "fab_hours": result.fab_hours,
-        "install_hours": result.install_hours,
-        "final_price_egp": result.final_price_egp,
-        "schedule": result.schedule,
-        "project": project.code if project else None,
-    }
+    est = Estimate(
+        project_id=project.id, version=1, decision=result.decision,
+        material_cost_egp=result.material_cost_egp or 0.0,
+        consumables_egp=result.consumables_egp or 0.0,
+        fab_hours=result.fab_hours or 0.0,
+        install_hours=result.install_hours or 0.0,
+        labour_cost_egp=result.labour_cost_egp or 0.0,
+        margin_applied=result.margin_applied or 0.0,
+        final_price_egp=result.final_price_egp or 0.0,
+        citations_json={"citations": result.citations,
+                        "reasons": result.reasons,
+                        "schedule": result.schedule},
+        created_by=user.id,
+    )
+    session.add(est)
+    session.flush()
+    approval = approvals_svc.queue_plan_release(session, est, project)
+    approval_id = approval.id
+    if account_has_client(session, spec.account_id):
+        sched = result.schedule or {}
+        send_email(session, spec.account_id, "plan_ready",
+                   {"code": spec.code, "title": spec.title,
+                    "price": f"{result.final_price_egp:,.0f}" if result.final_price_egp else "—",
+                    "fab_hours": f"{result.fab_hours:g}",
+                    "install_hours": f"{result.install_hours:g}",
+                    "finish_date": sched.get("planned_finish", "TBC")})
+
+    return {"code": code, "status": "approved",
+            "decision": result.decision, "project": project.code,
+            "approval_id": approval_id,
+            "final_price_egp": result.final_price_egp,
+            "schedule": result.schedule}
+
+
+@router.get("/requests/rejected")
+def rejected_requests(user: User = Depends(require_roles("estimator", "manager")),
+                      session: Session = Depends(get_session)):
+    """Rejected requests — permanent record with who/why."""
+    specs = session.scalars(
+        select(Spec).where(Spec.status == "rejected").order_by(Spec.id.desc())
+    ).all()
+    out = []
+    for s in specs:
+        acc = session.get(Account, s.account_id)
+        reviewer = session.get(User, s.reviewed_by) if s.reviewed_by else None
+        out.append({"code": s.code, "title": s.title,
+                    "account": acc.name if acc else "",
+                    "note": s.rejection_note,
+                    "reviewer": reviewer.full_name if reviewer else "—"})
+    return out
 
 
 def _account_code(session: Session, account_id: int) -> str:
@@ -351,9 +422,6 @@ def delete_project(code: str,
         raise HTTPException(
             403, "Released orders are permanent history and cannot be deleted "
             "(needed to track client behaviour). Cancel instead.")
-    if project.stage not in ("Production Planning",):
-        raise HTTPException(
-            403, f"Project already at '{project.stage}' — too far along to delete.")
 
     for ev in session.scalars(select(StageEvent)
                               .where(StageEvent.project_id == project.id)).all():
@@ -378,7 +446,7 @@ def submit_to_manager(code: str,
                       session: Session = Depends(get_session)):
     """Estimator finished reviewing the plan -> send to manager queue."""
     from finalproject.tracking import approvals as approvals_svc
-    from finalproject.db.models import Estimate, Project
+    from finalproject.db.models import Account, Estimate, Project, User
 
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
