@@ -8,6 +8,8 @@ import { api } from "../../lib/api";
 export default function Approvals() {
   const [items, setItems] = useState([]);
   const [audit, setAudit] = useState([]);
+  const [awaitingClient, setAwaitingClient] = useState([]);
+  const [readyToRelease, setReadyToRelease] = useState([]);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
@@ -16,6 +18,10 @@ export default function Approvals() {
     try {
       setItems(await api("/approvals"));
       setAudit(await api("/audit"));
+      const board = await api("/board");
+      const all = Object.values(board.columns).flat();
+      setAwaitingClient(all.filter((p) => p.release_status === "manager_approved"));
+      setReadyToRelease(all.filter((p) => p.release_status === "client_accepted"));
     } catch (e) { setError(e.message); }
   }, []);
 

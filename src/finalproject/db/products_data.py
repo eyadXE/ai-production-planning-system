@@ -54,11 +54,40 @@ CATEGORY_IMAGE = {
 }
 
 
+# real product photos from ousus.com product pages
+NAME_IMAGE = {
+    "Railings": "/images/products/railings.jpg",
+    "Staircases": "/images/products/staircases.jpg",
+    "Ladders & Rungs": "/images/products/ladders.jpg",
+    "Walkways": "/images/products/walkways.jpg",
+    "Trench Covers": "/images/products/trench.jpg",
+    "Fences": "/images/products/fences.jpg",
+    "Gates": "/images/products/gates.jpg",
+    "Technical Rooms": "/images/products/techrooms.jpg",
+    "Car Sheds": "/images/products/carsheds.jpg",
+    "Claddings": "/images/products/claddings_cs.jpg",
+    "Warehouse Structures": "/images/products/warehouse.jpg",
+    "Heavy-Duty Staircases": "/images/products/heavy_stairs.jpg",
+    "Signal Light Posts": "/images/products/signal.jpg",
+    "Decorative Panels / Mushrabiya": "/images/products/mushrabiya.jpg",
+    "Sandtrap Louvers": "/images/products/louvers.jpg",
+    "Ship Ladders": "/images/products/shipladder.jpg",
+    "Aluminium Partitions": "/images/products/alu_partition.jpg",
+    "SS Railings": "/images/products/ss_railings.jpg",
+    "SS Claddings": "/images/products/ss_claddings.jpg",
+    "Gratings": "/images/products/gratings.jpg",
+    "Green Walls": "/images/products/greenwall.jpg",
+    "Water Tank Ladders": "/images/products/ss_tankladder.jpg",
+    "Roof Walkways": "/images/products/walkways.jpg",
+    "Technical Room Louvers": "/images/products/ss_techrooms.jpg",
+}
+
+
 def seed_products(session: Session) -> int:
     if session.scalar(select(Product).limit(1)):
         return 0  # already seeded
     for category, name, desc, img, kind, unit in PRODUCTS:
-        image = CATEGORY_IMAGE.get(category) or f"/images/{img}"
+        image = NAME_IMAGE.get(name) or CATEGORY_IMAGE.get(category) or f"/images/{img}"
         session.add(Product(
             category=category, name=name, description=desc,
             image=image, est_kind=kind, unit=unit,

@@ -65,17 +65,30 @@ def decide(session: Session, approval_id: int, approver: User,
         if estimate:
             project = session.get(Project, estimate.project_id)
             if project:
+                # Manager approves -> CLIENT gets the final say
                 project.release_status = (
-                    "released" if approved else "rejected"
+                    "manager_approved" if approved else "rejected"
                 )
                 if approved and account_email(session, project.account_id):
                     from finalproject.tracking.notify import send_email
 
+                    sched = ((estimate.citations_json or {}).get("schedule")
+                             or {})
                     send_email(
                         session, project.account_id, "plan_accepted",
                         {
                             "code": project.code,
                             "title": project.title,
+                            "items": "see plan details in dashboard",
+                            "finish": sched.get("planned_finish", "TBC"),
+                            "site": "—", "required":
+                                str(project.required_date or "—"),
+                            "fab_hours": f"{estimate.fab_hours:g}",
+                            "install_hours": f"{estimate.install_hours:g}",
+                            "price": (f"{estimate.final_price_egp:,.0f}"
+                                      if estimate.final_price_egp else "—"),
+                            "start_week": sched.get("start_week", "—"),
+                            "finish_date": sched.get("planned_finish", "—"),
                         },
                         estimate=estimate, project=project,
                     )

@@ -108,7 +108,7 @@ export default function Review() {
               <div className="mt-4 flex gap-2">
                 <button disabled={busy === s.code} onClick={() => review(s.code, true)}
                         className="bg-primary px-4 py-2 font-mono text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                  Approve → planning phase
+                  Approve & send plan to manager
                 </button>
                 <button disabled={busy === s.code} onClick={() => review(s.code, false)}
                         className="border border-destructive/40 px-4 py-2 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">

@@ -32,7 +32,10 @@ class DecisionIn(BaseModel):
 
 
 def _project_out(p: Project, ev) -> dict:
+    eng = (session_get_user(p.assigned_engineer_id)
+           if p.assigned_engineer_id else None)
     return {
+        "assigned_engineer": eng.full_name if eng else None,
         "code": p.code,
         "title": p.title,
         "stage": p.stage,
@@ -75,7 +78,7 @@ def estimate_spec(code: str,
             stage="Production Planning",
             status="on_track",
             required_date=parse_spec(spec.raw_text).deadline,
-            release_status="queued",
+            release_status="draft",
         )
         session.add(project)
         session.flush()
@@ -106,7 +109,7 @@ def estimate_spec(code: str,
 
         project.estimated_finish = _date.fromisoformat(
             result.schedule["planned_finish"])
-    approval = approvals_svc.queue_plan_release(session, est, project)
+    session.commit()
     return {
         "spec": code,
         "spec_title": spec.title,
@@ -123,8 +126,7 @@ def estimate_spec(code: str,
         "final_price_egp": result.final_price_egp,
         "schedule": result.schedule,
         "reasons": result.reasons,
-        "approval_id": approval.id,
-        "release_status": project.release_status,
+        "next_step": "review & submit-to-manager",
     }
 
 
@@ -316,3 +318,63 @@ def timeline(user: User = Depends(require_roles("engineer", "manager", "viewer")
                 for wl in week_labels
             ],
             "projects": rows}
+
+
+class ClientDecision(BaseModel):
+    accept: bool
+
+
+@router.post("/my/projects/{code}/decision")
+def my_project_decision(code: str, body: ClientDecision,
+                        user: User = Depends(get_current_user),
+                        session: Session = Depends(get_session)):
+    """Client accepts/declines a manager-approved plan from the portal."""
+    from fastapi import HTTPException as _HTTPException
+
+    project = session.scalar(select(Project).where(Project.code == code))
+    if not project:
+        raise _HTTPException(404, f"project {code} not found")
+    if user.role != "client" or user.account_id != project.account_id:
+        raise _HTTPException(403, "only the owning client can decide")
+    if project.release_status != "manager_approved":
+        raise _HTTPException(409, f"no plan awaiting your decision "
+                                  f"(status: {project.release_status})")
+    if body.accept:
+        project.release_status = "client_accepted"
+        msg = "Accepted — management will do the final release."
+    else:
+        project.release_status = "declined_by_client"
+        project.status = "cancelled"
+        msg = "Declined — our team will contact you."
+    session.commit()
+    return {"code": code, "release_status": project.release_status,
+            "message": msg}
+
+
+@router.get("/notifications/mine")
+def my_notifications(user: User = Depends(get_current_user),
+                     session: Session = Depends(get_session)):
+    """Client dashboard notifications (mirrors the emails)."""
+    from finalproject.db.models import Notification as N
+
+    q = select(N).order_by(N.id.desc()).limit(30)
+    rows = session.scalars(q).all()
+    acc_ids = {user.account_id}
+    out = []
+    for n in rows:
+        if user.account_id and n.account_id == user.account_id:
+            out.append({
+                "id": n.id, "template": n.template,
+                "subject": (n.payload_json or {}).get("subject", ""),
+                "at": n.sent_at.isoformat() if n.sent_at else None,
+            })
+    return {"notifications": [o for o in out][:20]}
+
+
+def session_get_user(user_id: int):
+    from finalproject.db.database import SessionLocal
+    from finalproject.db.models import User as _U
+
+    with SessionLocal() as s:
+        u = s.get(_U, user_id)
+        return u

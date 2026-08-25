@@ -126,6 +126,30 @@ Kill servers safely: `for pid in $(ps aux | grep "[u]vicorn\|[n]ext" | awk '{pri
       status, assigned engineer)
 - [x] Rules & escalation scenarios documented: OUSUS/rules_and_escalations.md
 
+**Latest session**
+- [x] NEW 5-gate workflow: Client submits → **Estimator** reviews/approves
+      (draft plan) → submits to Manager → **Manager approves + assigns
+      Project Engineer** → **Client accepts/declines from dashboard** →
+      **Manager releases** → Engineer walks stages to closure
+- [x] Roles split: estimator (type-1) vs project engineer (type-2);
+      role-scoped sidebars (each role sees only its own actions)
+- [x] Release protection: released/approved orders can never be deleted
+- [x] Estimated completion shown to client everywhere (deadline optional)
+- [x] Timeline calendar page (/timeline): capacity weeks × projects grid
+- [x] Daily summary now includes full project register (client/stage/status/
+      engineer per row); estimator sees resources/timeline view-only
+- [x] Real product photos for all 24 catalog items (from ousus.com)
+- [x] Chat hardening final: heuristic extraction from client's own words,
+      guided-mode fallback that cannot dead-end, auto-derivation of item names
+
+**Known issues / notes**
+- Gemini free-tier daily quota exhausts under heavy testing (resets daily);
+  Groq/OpenRouter/Ollama carry the load automatically meanwhile
+- Browser e2e (frontend/e2e_test.js) covers ~21 checks; staff-login steps
+  can be timing-flaky headless — rerun or use curl flows if needed
+- If pages ever show stale behavior after rebuilds: fully kill next-server
+  and restart (`npm run start` serves the build present AT START TIME)
+
 **P1**
 - [ ] Multi-currency quote display (fx_rates table already seeded USD/SAR)
 - [ ] CSV export of board/estimates

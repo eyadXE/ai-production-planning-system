@@ -10,19 +10,31 @@ import {
 import { clearSession, getUser } from "../lib/api";
 import ThemeToggle from "./ThemeToggle";
 
-const NAV = [
-  { href: "/summary", label: "Overview", icon: LayoutDashboard, roles: ["estimator", "engineer", "manager", "viewer"] },
-  { href: "/board", label: "Projects", icon: Box, roles: ["estimator", "engineer", "manager", "viewer"] },
-  { href: "/timeline", label: "Timeline", icon: CalendarDays, roles: ["estimator", "engineer", "manager", "viewer"] },
-  { href: "/review", label: "Review Requests", icon: MessageSquare, roles: ["estimator", "manager"] },
-  { href: "/estimate", label: "Estimator", icon: Gauge, roles: ["estimator", "manager"] },
-  { href: "/approvals", label: "Approvals", icon: FileCheck2, roles: ["manager"] },
-  { href: "/assign", label: "Assign Engineers", icon: UserCheck, roles: ["manager"] },
-];
-
-const ENGINEER_NAV = [
-  { href: "/my-assignments", label: "My Assignments", icon: Hammer },
-];
+const NAV = {
+  estimator: [
+    { href: "/review", label: "Requests", icon: MessageSquare },
+    { href: "/estimate", label: "Estimator", icon: Gauge },
+    { href: "/timeline", label: "Resources & Timeline", icon: CalendarDays },
+    { href: "/board", label: "Board (view)", icon: Box },
+  ],
+  engineer: [
+    { href: "/my-assignments", label: "My Assignments", icon: Hammer },
+    { href: "/board", label: "Projects", icon: Box },
+    { href: "/timeline", label: "Timeline (view)", icon: CalendarDays },
+  ],
+  manager: [
+    { href: "/summary", label: "Overview", icon: LayoutDashboard },
+    { href: "/review", label: "Requests", icon: MessageSquare },
+    { href: "/approvals", label: "Approvals & Release", icon: FileCheck2 },
+    { href: "/assign", label: "Assign Engineers", icon: UserCheck },
+    { href: "/board", label: "Projects", icon: Box },
+    { href: "/timeline", label: "Timeline", icon: CalendarDays },
+  ],
+  viewer: [
+    { href: "/board", label: "Projects (view)", icon: Box },
+    { href: "/timeline", label: "Timeline (view)", icon: CalendarDays },
+  ],
+};
 
 const CLIENT_NAV = [{ href: "/my", label: "My Projects", icon: Box }];
 
@@ -42,12 +54,7 @@ export default function AppShell({ active, title, subtitle, children }) {
     return null;
   }
 
-  let items = user.role === "client"
-    ? CLIENT_NAV
-    : NAV.filter((n) => n.roles.includes(user.role));
-  if (user.role === "engineer") {
-    items = [...items, ...ENGINEER_NAV];
-  }
+  const items = user.role === "client" ? CLIENT_NAV : (NAV[user.role] || []);
 
   const initials = (user.full_name || user.email)
     .split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();

@@ -103,32 +103,35 @@ def _estimate(code, estimator):
     return r.json()
 
 
-def test_estimate_queues_plan_for_release(estimator):
+def test_estimate_creates_draft_then_estimator_submits(estimator):
     body = _estimate("J-001", estimator)
     assert body["decision"] == "PLAN"
     assert body["fab_hours"] == 48.0
-    assert body["release_status"] == "queued"
-    assert body["approval_id"] > 0
+    r = client.post("/requests/J-001/submit-to-manager", headers=estimator)
+    assert r.status_code == 200, r.text
+    assert r.json()["release_status"] == "queued"
+    assert r.json()["approval_id"] > 0
 
 
-def test_manager_must_open_the_gate(manager, engineer):
-    pending = client.get("/approvals", headers=manager).json()
-    target = next(a for a in pending if a["type"] == "plan_release")
+def test_manager_must_open_the_gate(manager, engineer, estimator):
+    body = _estimate("J-004", estimator)
+    client.post("/requests/J-004/submit-to-manager", headers=estimator)
+    pending_all = client.get("/approvals", headers=manager).json()
+    approval_id = next(a["id"] for a in pending_all
+                       if f"for {body['project']} " in a["note"])
 
     # engineer cannot decide — the gate is manager-only (0.2)
-    r = client.post(f"/approvals/{target['id']}/decision",
+    r = client.post(f"/approvals/{approval_id}/decision",
                     json={"approved": True}, headers=engineer)
     assert r.status_code == 403
 
-    r = client.post(f"/approvals/{target['id']}/decision",
-                    json={"approved": True,
-                          "note": "materials verified"},
+    r = client.post(f"/approvals/{approval_id}/decision",
+                    json={"approved": True, "note": "materials verified"},
                     headers=manager)
     assert r.status_code == 200
     board = client.get("/board", headers=engineer).json()["columns"]
-    released = [p for col in board.values() for p in col
-                if p["code"] == "J-001"]
-    assert released and released[0]["release_status"] == "released"
+    row = [p for col in board.values() for p in col if p["code"] == "J-004"]
+    assert row and row[0]["release_status"] == "manager_approved"
 
 
 def test_double_decision_rejected(manager):
@@ -142,7 +145,13 @@ def test_double_decision_rejected(manager):
         assert r.status_code == 409
 
 
-def test_audit_trail_names_the_approver(manager):
+def test_audit_trail_names_the_approver(manager, estimator):
+    client.post("/requests/J-003/submit-to-manager", headers=estimator)
+    pending = client.get("/approvals", headers=manager).json()
+    if pending:
+        aid = pending[0]["id"]
+        client.post(f"/approvals/{aid}/decision",
+                    json={"approved": True}, headers=manager)
     audit = client.get("/audit", headers=manager).json()
     assert audit, "decisions recorded"
     decided = [a for a in audit if a["decision"] != "pending"]

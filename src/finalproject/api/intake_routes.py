@@ -228,9 +228,12 @@ def review_request(code: str, approve: bool,
     # Custom-only requests can't be auto-estimated by the rate handbook —
     # they go straight to the board for manual engineering planning.
     if structured.get("custom") and not structured.get("items"):
-        spec.project_ref = _create_project_from_spec(session, spec)
+        code_ref = _create_project_from_spec(session, spec)
+        proj_row = session.scalar(select(Project).where(Project.code == code_ref))
+        if proj_row:
+            proj_row.release_status = "draft"
         if account_has_client(session, spec.account_id):
-            send_email(session, spec.account_id, "spec_approved",
+            send_email(session, spec.account_id, "custom_manual_plan",
                        {"code": spec.code, "title": spec.title})
         return {
             "code": spec.code, "status": spec.status,
@@ -243,7 +246,6 @@ def review_request(code: str, approve: bool,
     result = run_estimate(session, spec.raw_text, parsed)
 
     project = None
-    approval_id = None
     if result.decision in ("PLAN", "DELAY_RISK"):
         required = parsed.deadline
         project = Project(
@@ -277,9 +279,14 @@ def review_request(code: str, approve: bool,
 
             project.estimated_finish = _d.fromisoformat(
                 result.schedule["planned_finish"])
+        if result.schedule and result.schedule.get("planned_finish"):
+            from datetime import date as _d
+            project.estimated_finish = _d.fromisoformat(
+                result.schedule["planned_finish"])
+        project.release_status = "draft"
         session.add(est)
         session.flush()
-        approval = approvals_svc.queue_plan_release(session, est, project)
+        # stays as estimator DRAFT until they submit it to the manager
         approval_id = approval.id
         if account_has_client(session, spec.account_id):
             send_email(session, spec.account_id, "spec_approved",
@@ -294,7 +301,6 @@ def review_request(code: str, approve: bool,
         "final_price_egp": result.final_price_egp,
         "schedule": result.schedule,
         "project": project.code if project else None,
-        "approval_id": approval_id,
     }
 
 
@@ -339,7 +345,8 @@ def delete_project(code: str,
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
         raise HTTPException(404, f"project {code} not found")
-    if project.release_status == "released":
+    if project.release_status in ("released", "manager_approved",
+                                  "client_accepted"):
         raise HTTPException(
             403, "Released orders are permanent history and cannot be deleted "
             "(needed to track client behaviour). Cancel instead.")
@@ -358,3 +365,117 @@ def delete_project(code: str,
     session.delete(project)
     session.commit()
     return {"deleted": code}
+
+
+class DecisionIn(BaseModel):
+    accept: bool
+
+
+@router.post("/requests/{code}/submit-to-manager")
+def submit_to_manager(code: str,
+                      user: User = Depends(require_roles("estimator", "manager")),
+                      session: Session = Depends(get_session)):
+    """Estimator finished reviewing the plan -> send to manager queue."""
+    from finalproject.tracking import approvals as approvals_svc
+    from finalproject.db.models import Estimate, Project
+
+    project = session.scalar(select(Project).where(Project.code == code))
+    if not project:
+        raise HTTPException(404, f"project {code} not found")
+    if project.release_status not in ("draft", "queued"):
+        raise HTTPException(409, f"release_status is '{project.release_status}'")
+    est = session.scalar(
+        select(Estimate).where(Estimate.project_id == project.id)
+        .order_by(Estimate.version.desc()))
+    if not est:
+        raise HTTPException(409, "no estimate to submit")
+
+    project.release_status = "queued"
+    approval = approvals_svc.queue_plan_release(session, est, project)
+
+    # notify the client that the plan is with management
+    if account_has_client(session, spec_account_id(session, code)):
+        from finalproject.tracking.notify import send_email
+        sched = (est.citations_json or {}).get("schedule") or {}
+        send_email(session, project.account_id, "plan_ready",
+                   {"code": project.code, "title": project.title,
+                    "price": f"{est.final_price_egp:,.0f}" if est.final_price_egp else "—",
+                    "fab_hours": f"{est.fab_hours:g}",
+                    "install_hours": f"{est.install_hours:g}",
+                    "finish_date": sched.get("planned_finish", "TBC")})
+    return {"code": code, "release_status": "queued",
+            "approval_id": approval.id}
+
+
+@router.post("/projects/{code}/client-decision")
+def client_decision(code: str, body: DecisionIn,
+                    user: User = Depends(get_current_user),
+                    session: Session = Depends(get_session)):
+    """Client accepts or declines the manager-approved plan."""
+    project = session.scalar(select(Project).where(Project.code == code))
+    if not project:
+        raise HTTPException(404, f"project {code} not found")
+    if user.role != "client" or user.account_id != project.account_id:
+        raise HTTPException(403, "only the owning client can decide")
+    if project.release_status != "manager_approved":
+        raise HTTPException(409, f"no plan awaiting client decision "
+                                 f"(status: {project.release_status})")
+    if body.accept:
+        project.release_status = "client_accepted"
+        msg = "Accepted — waiting for final release by management."
+    else:
+        project.release_status = "declined_by_client"
+        project.status = "cancelled"
+        msg = "Declined — our team will contact you."
+    session.commit()
+    return {"code": code, "release_status": project.release_status,
+            "message": msg}
+
+
+@router.post("/projects/{code}/release")
+def release_project(code: str,
+                    user: User = Depends(require_roles("manager")),
+                    session: Session = Depends(get_session)):
+    """Final release after client acceptance — records approver, emails client."""
+    from finalproject.db.models import Approval, Estimate
+    from finalproject.tracking.notify import send_email
+
+    project = session.scalar(select(Project).where(Project.code == code))
+    if not project:
+        raise HTTPException(404, f"project {code} not found")
+    if project.release_status != "client_accepted":
+        raise HTTPException(409, "client must accept the plan before release "
+                                 f"(status: {project.release_status})")
+    if not project.assigned_engineer_id:
+        raise HTTPException(409, "assign a project engineer before releasing")
+
+    est = session.scalar(
+        select(Estimate).where(Estimate.project_id == project.id)
+        .order_by(Estimate.version.desc()))
+    session.add(Approval(
+        approval_type="final_release", entity_id=est.id if est else project.id,
+        approver_id=user.id, decision="approved",
+        note=f"Released after client acceptance"))
+    project.release_status = "released"
+    if account_has_client(session, project.account_id):
+        schedule = ((est.citations_json or {}).get("schedule") or {}
+                    ) if est else {}
+        send_email(session, project.account_id, "plan_accepted",
+                   {"code": project.code, "title": project.title,
+                    "items": "see plan", "finish": "—", "site": "—",
+                    "required": str(project.required_date or "—"),
+                    "fab_hours": f"{est.fab_hours:g}" if est else "—",
+                    "install_hours": f"{est.install_hours:g}" if est else "—",
+                    "price": f"{est.final_price_egp:,.0f}" if est and est.final_price_egp else "—",
+                    "start_week": schedule.get("start_week", "—"),
+                    "finish_date": schedule.get("planned_finish", "—")},
+                   estimate=est, project=project)
+    session.commit()
+    return {"code": code, "release_status": "released"}
+
+
+def spec_account_id(session: Session, code: str):
+    from finalproject.db.models import Spec as _S
+
+    sp = session.scalar(select(_S).where(_S.code == code))
+    return sp.account_id if sp else None

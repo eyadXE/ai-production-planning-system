@@ -37,6 +37,31 @@ TEMPLATES = {
         "Track it any time in your Ousus client portal.\n\n"
         "— Ousus Production Platform",
     ),
+    "plan_ready": (
+        "Your Ousus request {code} is ready — price EGP {price}",
+        "Your request passed engineering review. Here is the full plan:\n\n"
+        "REQUEST:      {code} — {title}\n"
+        "Fabrication:  {fab_hours} h\n"
+        "Installation: {install_hours} h\n"
+        "Quoted price: EGP {price}\n"
+        "Estimated completion: {finish_date}\n\n"
+        "Open your Ousus dashboard to ACCEPT this plan — production starts "
+        "as soon as management releases it after your acceptance.\n\n"
+        "— Ousus Production Platform",
+    ),
+    "custom_manual_plan": (
+        "Your custom Ousus request {code} is with our engineers",
+        "Custom request '{title}' ({code}) needs manual planning by our "
+        "engineering team (it is outside the standard rate handbook).\n"
+        "You will receive the plan and price shortly.\n\n"
+        "— Ousus Production Platform",
+    ),
+    "client_accepted": (
+        "Ousus: you accepted the plan for {code}",
+        "You accepted the plan for '{title}' ({code}). Management is doing "
+        "the final release — fabrication starts right after that.\n\n"
+        "— Ousus Production Platform",
+    ),
     "spec_approved": (
         "Your Ousus request {code} was approved for planning",
         "Your request has passed engineering review and is now in the "
