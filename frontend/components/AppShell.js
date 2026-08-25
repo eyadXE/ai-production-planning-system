@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  BarChart3, Box, CalendarDays, FileCheck2, Gauge, Hammer,
+  Box, CalendarDays, FileCheck2, Hammer,
   LayoutDashboard, MessageSquare, UserCheck, X, Menu, LogOut,
 } from "lucide-react";
 import { clearSession, getUser } from "../lib/api";
@@ -13,7 +13,8 @@ import ThemeToggle from "./ThemeToggle";
 const NAV = {
   estimator: [
     { href: "/review", label: "Requests", icon: MessageSquare },
-    { href: "/resources", label: "Resources & Timeline", icon: CalendarDays },
+    { href: "/resources", label: "Resources", icon: LayoutDashboard },
+    { href: "/timeline", label: "Timeline (view)", icon: CalendarDays },
     { href: "/board", label: "Board (view)", icon: Box },
   ],
   engineer: [
