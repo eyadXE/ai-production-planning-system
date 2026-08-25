@@ -31,22 +31,22 @@ export default function Timeline() {
 
   // build a continuous list of weeks: from earliest capacity week to +12 months
   const start = data.weeks.length
-    ? weekLabelToDate(data.weeks[0].week)
+    ? weekLabelToDate(data.weeks[0].label)
     : new Date();
   const totalWeeks = Math.max(data.weeks.length, 60); // scroll ~14 months
   const allWeeks = [];
   for (let i = 0; i < totalWeeks; i++) {
-    const d = new Date(start);
-    d.setUTCDate(d.getUTCDate() + i * 7);
-    const y = d.getUTCFullYear();
+    const dt = new Date(start);
+    dt.setUTCDate(dt.getUTCDate() + i * 7);
+    const y = dt.getUTCFullYear();
     const jan4 = new Date(Date.UTC(y, 0, 4));
     const day = jan4.getUTCDay() || 7;
-    const w = Math.ceil(((d - jan4) / 86400000 + day) / 7);
+    const w = Math.ceil(((dt - jan4) / 86400000 + day) / 7);
     const label = `${y}-W${String(w).padStart(2, "0")}`;
     const cap = data.weeks.find((x) => x.label === label);
     allWeeks.push({
       label,
-      month: MONTHS[d.getUTCMonth()],
+      month: MONTHS[dt.getUTCMonth()],
       year: y,
       free: cap ? cap.free_hours : null,   // null = beyond known capacity
       total: cap ? cap.total_hours : 320,

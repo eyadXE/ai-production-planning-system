@@ -210,16 +210,41 @@ def run_estimate_endpoint(code: str,
             # manual-plan path handled at decision time
             pass
 
+    # custom-only requests cannot be auto-estimated — the estimator reviews
+    # them as a MANUAL_PLAN (engineer-priced, no handbook rates apply)
+    if structured.get("custom") and not parsed.items:
+        return {
+            "code": code, "title": spec.title,
+            "decision": "MANUAL_PLAN", "key_clause": "0.5",
+            "reasons": ["Custom build — routed to engineers for a manual "
+                        "plan and quote."],
+            "fab_hours": None, "install_hours": None,
+            "final_price_egp": None, "material_cost_egp": None,
+            "schedule": None,
+            "bom_with_stock": [],
+            "custom_items": structured.get("custom") or [],
+        }
+
     materials = session.scalars(select(Material)).all()
     stock_map = {m.code: m.stock_qty for m in materials}
+    leads = {m.code: m.lead_time_weeks for m in materials}
 
     result = run_estimate(session, spec.raw_text, parsed)
 
-    # resource check: required vs available per line
-    resource_lines = []
-    for l in result.bom_lines:
-        resource_lines.append({**l, "stock": stock_map.get(l["code"], 0),
-                               "sufficient": stock_map.get(l["code"], 0) >= l["qty"]})
+    shortages = []
+    bom_lines = []
+    for l in getattr(result, "bom_lines", []):
+        code_l = l.get("code", "")
+        needed = l.get("qty", 0)
+        stk = stock_map.get(code_l, 0)
+        sufficient = stk >= needed
+        if not sufficient:
+            shortages.append({"code": code_l, "needed": needed,
+                              "stock": stk,
+                              "lead_time_weeks": leads.get(code_l, 0)})
+        bom_lines.append({**l, "stock": stk, "sufficient": sufficient})
+    result.bom_with_stock = bom_lines
+    result.shortages = shortages
 
     return {
         "code": code, "title": spec.title,
@@ -229,8 +254,8 @@ def run_estimate_endpoint(code: str,
         "final_price_egp": result.final_price_egp,
         "material_cost_egp": result.material_cost_egp,
         "schedule": result.schedule,
-        "bom_with_stock": resource_lines,
-        "shortages": result.shortages if hasattr(result, "shortages") else [],
+        "bom_with_stock": bom_lines,
+        "shortages": shortages,
         "citations": result.citations,
         "estimated_finish": (result.schedule or {}).get("planned_finish"),
     }
