@@ -105,6 +105,27 @@ Kill servers safely: `for pid in $(ps aux | grep "[u]vicorn\|[n]ext" | awk '{pri
 - [ ] Gmail app password → real email sending (user action)
 - [ ] Optional: product-specific photos per catalog item
 
+**Done since last update**
+- [x] Estimator (type-1 engineer) vs Project Engineer (type-2) roles:
+      estimator reviews requests; manager assigns projects to engineers
+      (/assign); engineers follow stages via /my-assignments
+- [x] Released/approved orders can never be deleted — permanent history
+- [x] Estimated completion computed by the pipeline, shown in client
+      portal + emails; client deadline now optional everywhere
+- [x] Manager Timeline page (/timeline): capacity-week calendar with every
+      project's fabrication/install bars, assigned engineer, est. finish
+- [x] Chat hardening: server-side field memory (no re-asking), name derived
+      from description, heuristic extraction from the client's own words,
+      <think>-stripping JSON parser, auto-switch to deterministic guided
+      interview when all LLM providers fail ("Quick form" button too)
+- [x] Error boundaries (error.js / global-error.js) — page crashes now show
+      a recoverable error with Try Again instead of the dead app screen
+- [x] Playwright e2e suite (frontend/e2e_test.js): 20 real-browser checks
+      covering signup → catalog → cart → chat → review → gate → board
+- [x] Daily summary includes full project register (client, stage,
+      status, assigned engineer)
+- [x] Rules & escalation scenarios documented: OUSUS/rules_and_escalations.md
+
 **P1**
 - [ ] Multi-currency quote display (fx_rates table already seeded USD/SAR)
 - [ ] CSV export of board/estimates
