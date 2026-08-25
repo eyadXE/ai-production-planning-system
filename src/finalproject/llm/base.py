@@ -39,8 +39,14 @@ DEFAULT_CHAIN = [
         "openai", 700, json_mode=False,
     ),
     ProviderConfig(
-        "openrouter-free", "OPENROUTER_API_KEY",
+        "openrouter-nemotron", "OPENROUTER_API_KEY",
         "nvidia/nemotron-3.5-lightning:free",
+        "https://openrouter.ai/api/v1/chat/completions",
+        "openai", 200,
+    ),
+    ProviderConfig(
+        "openrouter-minimax", "OPENROUTER_API_KEY",
+        "minimax/minimax-m3:free",
         "https://openrouter.ai/api/v1/chat/completions",
         "openai", 200,
     ),

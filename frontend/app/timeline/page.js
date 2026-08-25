@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, UserCheck } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { api } from "../../lib/api";
 

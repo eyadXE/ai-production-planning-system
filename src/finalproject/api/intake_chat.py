@@ -160,137 +160,23 @@ def _heuristic_fill(session: Session, cs: ChatSession, fields: dict,
             if m2:
                 fields["quantity"] = float(words[m2[-1]])
         else:
-            token = (m.group(1) or m.group(0)).lower().strip()
-            try:
-                fields["quantity"] = float(words.get(token, token))
-            except ValueError:
-                pass
-
-    if not str(fields.get("material_finish") or "").strip():
-        for kw in ("stainless steel", "mild steel", "stainless",
-                   "aluminium", "aluminum", "galvanised", "galvanized",
-                   "high-temp black paint", "shop paint", "painted"):
-            idx = low.find(kw)
-            if idx != -1:
-                fields["material_finish"] = blob[idx:idx + 80].strip()
-                break
-@router.post("/{session_id}/message")
-
-def message(session_id: int, body: MessageIn,
-            user: User = Depends(get_current_user),
-            session: Session = Depends(get_session)):
-    cs = session.get(ChatSession, session_id)
-    if not cs or cs.user_id != user.id:
-        raise HTTPException(404, "chat session not found")
-    if cs.status != "active":
-        raise HTTPException(409, "request already submitted")
-    session.add(ChatMessage(session_id=cs.id, role="client",
-                            content=body.text))
-
-    stored = cs.collected_json or {}
-    fields = _merge_fields(stored, stored.get("pending_data"))
-    _heuristic_fill(session, cs, fields, extra_text=body.text)
-    import logging as _lg
-    _lg.warning("INTAKE state: %s | client said: %s", fields, body.text[:80])
-
-    # deterministic guided fallback when every provider is down
-    if stored.get("guided") or not configured_chain():
-        return guided_turn(session, cs, user, stored, fields, body.text)
-
-    client = LLMClient()
-    prompt = (_history(session, cs) + f"\nCLIENT: {body.text}"
-              + "\n\nSERVER CONTEXT:\n" + _context(fields, stored.get("photo")))
-    resp = client.complete(prompt, system=SYSTEM_PROMPT)
-    if resp is None:
-        # every provider down -> switch this session to the rule-driven
-        # guided interview over the same schema
-        stored = dict(stored)
-        stored["guided"] = True
-        cs.collected_json = stored
-        session.add(ChatMessage(session_id=cs.id, role="assistant",
-                                content="(Switched to guided mode.)"))
-        session.commit()
-        result = guided_turn(session, cs, user, stored, fields, body.text)
-        result["guided"] = True
-        return result
-    data = extract_json(resp.content)
-    if not data or not str(data.get("reply") or "").strip():
-        resp = client.complete(
-            prompt + "\n\nSYSTEM: Output ONLY the JSON object as instructed.",
-            system=SYSTEM_PROMPT)
-        data = extract_json(resp.content) if resp else None
-    if not data or not str(data.get("reply") or "").strip():
-        # two consecutive unusable turns -> deterministic guided mode
-        stored = dict(stored); stored["guided"] = True
-        cs.collected_json = stored
-        session.commit()
-        result = guided_turn(session, cs, user, stored, fields, body.text)
-        result["auto_switched"] = True
-        return result
-
-    # merge whatever the model extracted this turn into server-side state
-    fields = _merge_fields(fields, data.get("data"))
-    _heuristic_fill(session, cs, fields, extra_text=body.text)
-    missing_required = [k for k in REQUIRED if k not in fields]
-
-    # name derives from description — clients shouldn't have to name things
-    if not str(fields.get("name") or "").strip() and fields.get("description"):
-        words = str(fields["description"]).split()
-        fields["name"] = " ".join(words[:5]).strip(" ,.-").title()
-
-    if data.get("complete"):
-        if missing_required:
-            data["complete"] = False
-            labels = [label for key, label in FIELD_ORDER
-                      if key in missing_required]
-            data["reply"] = ("Before I submit I still need: "
-                             + ", ".join(labels) + ".")
-        else:
-            code = next_spec_code(session)
-            desc = str(fields["description"])
-            qty = fields["quantity"]
-            try:
-                qty_f = float(qty)
-                qty_txt = f"x{qty_f:g}"
-            except (TypeError, ValueError):
-                qty_txt = ""
-            material = fields.get("material_finish", "")
-            structured = {
-                "items": [],
-                "custom": [{
-                    "name": fields["name"],
-                    "description": desc,
-                    "photo": stored.get("photo", ""),
-                    "quantity": qty,
-                    "material_finish": material,
-                }],
-                "finish": material,
-                "site": fields.get("site") or "",
-                "required_raw": fields.get("required_raw") or "",
-            }
-            spec = Spec(
-                code=code,
-                account_id=user.account_id,
-                title=str(fields["name"])[:200],
-                raw_text=(
-                    f"Project ID: {code}\nTitle: {fields['name']}\nDate: auto\n\n"
-                    f"Items: custom — {desc} {qty_txt} ({material})\n"
-                    f"Site: {structured['site'] or 'unstated'}\n"
-                    f"Required: {structured['required_raw'] or 'no deadline given'}\n"
-                ),
-                structured_json=structured,
-                source="chat_intake",
-                status="pending_review",
-            )
-            session.add(spec)
-            cs.status = "submitted"
+            # do NOT auto-submit — hand the collected build back so the
+            # client keeps shopping and submits everything at checkout
+            cs.status = "collected"
             cs.collected_json = {"fields": fields,
                                  "photo": stored.get("photo", "")}
             session.add(ChatMessage(
                 session_id=cs.id, role="assistant",
-                content=f"Submitted as request {spec.code}."))
+                content=f"Added '{fields['name']}' to your request."))
             session.commit()
-            return {"llm": True, "complete": True, "code": spec.code,
+            return {"llm": True, "complete": True,
+                    "custom_line": {
+                        "name": fields["name"],
+                        "description": desc,
+                        "photo": stored.get("photo", ""),
+                        "quantity": qty if isinstance(qty, float) else 1,
+                        "material_finish": material,
+                    },
                     "reply": data["reply"]}
 
     session.add(ChatMessage(session_id=cs.id, role="assistant",

@@ -33,4 +33,12 @@ def init_db() -> None:
 
 
 def get_session():
-    return SessionLocal()
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()   # auto-commit successful requests
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

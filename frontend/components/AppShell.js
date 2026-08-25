@@ -13,8 +13,7 @@ import ThemeToggle from "./ThemeToggle";
 const NAV = {
   estimator: [
     { href: "/review", label: "Requests", icon: MessageSquare },
-    { href: "/estimate", label: "Estimator", icon: Gauge },
-    { href: "/timeline", label: "Resources & Timeline", icon: CalendarDays },
+    { href: "/resources", label: "Resources & Timeline", icon: CalendarDays },
     { href: "/board", label: "Board (view)", icon: Box },
   ],
   engineer: [

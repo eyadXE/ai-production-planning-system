@@ -134,7 +134,7 @@ def estimate_spec(code: str,
 
 
 @router.get("/board")
-def board(user: User = Depends(require_roles("engineer", "manager", "viewer")),
+def board(user: User = Depends(require_roles("estimator", "engineer", "manager", "viewer")),
           session: Session = Depends(get_session)):
     projects = session.scalars(select(Project)).all()
     columns = {s: [] for s in STAGES}
@@ -212,7 +212,7 @@ def audit(user: User = Depends(require_roles("manager")),
 
 
 @router.get("/summary/daily")
-def daily_summary(user: User = Depends(require_roles("engineer", "manager")),
+def daily_summary(user: User = Depends(require_roles("manager")),
                   session: Session = Depends(get_session)):
     return tracking.daily_summary(session)
 
@@ -276,7 +276,7 @@ def my_assignments(user: User = Depends(get_current_user),
 
 
 @router.get("/timeline")
-def timeline(user: User = Depends(require_roles("engineer", "manager", "viewer")),
+def timeline(user: User = Depends(require_roles("estimator", "engineer", "manager", "viewer")),
              session: Session = Depends(get_session)):
     """Manager map: every project laid over the coming capacity weeks."""
     from finalproject.db.models import CapacityWeek
@@ -378,3 +378,19 @@ def session_get_user(user_id: int):
     with SessionLocal() as s:
         u = s.get(_U, user_id)
         return u
+
+
+@router.get("/materials")
+def materials_stock(user: User = Depends(
+        require_roles("estimator", "engineer", "manager")),
+        session: Session = Depends(get_session)):
+    """Resource view: current stock for capacity planning."""
+    from finalproject.db.models import Material as M
+
+    rows = session.scalars(select(M).order_by(M.code)).all()
+    return {"materials": [
+        {"code": m.code, "name": m.name, "unit": m.unit,
+         "price_egp": m.price_egp, "stock": m.stock_qty,
+         "lead_time_weeks": m.lead_time_weeks}
+        for m in rows
+    ]}

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { FileDown, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { FileDown, MessageSquare, Paperclip, Trash2 } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { api, getUser } from "../../lib/api";
 import { addCustom, addItem, clearCart, getCart, removeLine, setQty } from "../../lib/cart";
@@ -32,7 +32,7 @@ export default function RequestPage() {
   const [chatSession, setChatSession] = useState(null);
   const [chatOffline, setChatOffline] = useState(false);
   const [chatDoneCode, setChatDoneCode] = useState(null);
-  const chatBoxRef = useRef(null);
+  const [cartCount, setCartCount] = useState(0);
 
   useEffect(() => {
     setUser(getUser());
@@ -66,8 +66,27 @@ export default function RequestPage() {
     );
   }
 
-  if (submittedCode || chatDoneCode) {
-    const code = submittedCode || chatDoneCode;
+  if (chatDoneCode) {
+    return (
+      <AppShell active="New request" title="Added to your request">
+        <div className="border border-border bg-card p-8 text-center">
+          <p className="font-mono text-sm text-foreground">
+            Your custom build was added. Keep shopping or go to
+            <b className="text-foreground"> Step 3 · Review &amp; submit</b>.
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            <button onClick={() => { setChatDoneCode(null); setTab("submit"); }}
+                    className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90">
+              Review &amp; submit
+            </button>
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (submittedCode) {
+    const code = submittedCode;
     return (
       <AppShell active="New request" title="Request submitted">
         <div className="border border-border bg-card p-8 text-center">
@@ -127,6 +146,26 @@ export default function RequestPage() {
       if (out.complete && out.code) setChatDoneCode(out.code);
     } catch (e) {
       cPush("assistant", e.message);
+    } finally { setChatBusy(false); }
+  }
+
+  async function attachChatPhoto(file) {
+    if (!file || !chatSession) return;
+    setChatBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/uploads", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("ousus_token")}` },
+        body: fd,
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof out.detail === "string" ? out.detail : `HTTP ${res.status}`);
+      await api(`/intake/${chatSession}/photo`, { method: "POST", body: { url: out.url } });
+      cPush("assistant", "Reference photo attached.");
+    } catch (e) {
+      cPush("assistant", `Upload failed: ${e.message}`);
     } finally { setChatBusy(false); }
   }
 
@@ -263,6 +302,12 @@ export default function RequestPage() {
                          onKeyDown={(e) => e.key === "Enter" && sendChat()}
                          placeholder="Type your answer…" disabled={chatBusy}
                          className="flex-1 border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
+                  <label className="cursor-pointer border border-border p-2.5 text-muted-foreground hover:border-primary hover:text-primary"
+                         title="Attach reference photo">
+                    <Paperclip className="size-4" />
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
+                           onChange={(e) => attachChatPhoto(e.target.files?.[0])} disabled={chatBusy} />
+                  </label>
                   <button onClick={sendChat} disabled={chatBusy}
                           className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">Send</button>
                 </div>

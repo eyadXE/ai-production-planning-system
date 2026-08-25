@@ -217,19 +217,18 @@ def review_request(code: str, approve: bool,
         missing = []
         if not parsed.items and not custom:
             missing.append("item dimensions/quantities")
-        fin = parsed.finish.lower().strip(" .")
-        if not fin or fin == "unstated":
-            if not custom:      # custom objects carry their own description
-                missing.append("finish")
+        # finish & deadline are OPTIONAL on client requests — the estimator
+        # plans them (clients can't add finish data per requirements)
         # deadline is optional — the platform computes the estimated
         # completion itself; client's date only drives DELAY_RISK
         parsed.missing = missing
 
     # Custom-only requests can't be auto-estimated by the rate handbook —
     # they go straight to the board for manual engineering planning.
+    project_code = None
     if structured.get("custom") and not structured.get("items"):
-        code_ref = _create_project_from_spec(session, spec)
-        proj_row = session.scalar(select(Project).where(Project.code == code_ref))
+        project_code = _create_project_from_spec(session, spec)
+        proj_row = session.scalar(select(Project).where(Project.code == project_code))
         if proj_row:
             proj_row.release_status = "draft"
         if account_has_client(session, spec.account_id):
@@ -240,7 +239,7 @@ def review_request(code: str, approve: bool,
             "decision": "MANUAL_PLAN",
             "reasons": ["Contains custom object(s) — routed to engineers "
                         "for a manual plan (rate handbook does not apply)."],
-            "project": spec.project_ref,
+            "project": project_code,
         }
 
     result = run_estimate(session, spec.raw_text, parsed)
@@ -287,11 +286,11 @@ def review_request(code: str, approve: bool,
         session.add(est)
         session.flush()
         # stays as estimator DRAFT until they submit it to the manager
-        approval_id = approval.id
         if account_has_client(session, spec.account_id):
             send_email(session, spec.account_id, "spec_approved",
                        {"code": spec.code, "title": spec.title})
 
+    session.commit()
     session.refresh(spec)
     return {
         "code": spec.code, "status": spec.status,
@@ -345,8 +344,10 @@ def delete_project(code: str,
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
         raise HTTPException(404, f"project {code} not found")
-    if project.release_status in ("released", "manager_approved",
-                                  "client_accepted"):
+    if project.release_status != "draft":
+        raise HTTPException(403,
+            "Only estimator-draft requests can be deleted — approved and "
+            "released orders are permanent history.")
         raise HTTPException(
             403, "Released orders are permanent history and cannot be deleted "
             "(needed to track client behaviour). Cancel instead.")
@@ -382,7 +383,7 @@ def submit_to_manager(code: str,
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
         raise HTTPException(404, f"project {code} not found")
-    if project.release_status not in ("draft", "queued"):
+    if project.release_status not in ("draft",):
         raise HTTPException(409, f"release_status is '{project.release_status}'")
     est = session.scalar(
         select(Estimate).where(Estimate.project_id == project.id)
@@ -392,6 +393,7 @@ def submit_to_manager(code: str,
 
     project.release_status = "queued"
     approval = approvals_svc.queue_plan_release(session, est, project)
+    session.refresh(project)
 
     # notify the client that the plan is with management
     if account_has_client(session, spec_account_id(session, code)):
