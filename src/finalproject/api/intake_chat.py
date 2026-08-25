@@ -9,6 +9,7 @@ material_finish. Site / deadline asked once but optional.
 
 import json
 import logging
+import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,7 +37,7 @@ FIELD_ORDER = [
     ("site", "delivery/installation location"),
     ("required_raw", "deadline phrase (optional — we estimate completion ourselves)"),
 ]
-REQUIRED = {"name", "description", "quantity", "material_finish"}
+REQUIRED = {"description", "quantity", "material_finish"}
 
 SYSTEM_PROMPT = """You are the friendly custom-work assistant for Ousus, a \
 steel fabrication company. The client wants something CUSTOM built. Your job \
@@ -126,7 +127,55 @@ def start(user: User = Depends(get_current_user),
     return {"session_id": cs.id, "reply": reply, "llm": True}
 
 
+def _heuristic_fill(session: Session, cs: ChatSession, fields: dict,
+                    extra_text: str = "") -> None:
+    """Safety net: pull required fields straight from the client's own words
+    so completion never depends on the model restating them."""
+    msgs = session.scalars(
+        select(ChatMessage).where(ChatMessage.session_id == cs.id,
+                                  ChatMessage.role == "client")
+        .order_by(ChatMessage.id)
+    ).all()
+    contents = [m.content for m in msgs]
+    if extra_text:
+        contents.append(extra_text)
+    blob = " ".join(contents)
+    low = blob.lower()
+
+    if not fields.get("description") and contents and max(
+            (len(c) for c in contents), default=0) > 10:
+        fields["description"] = max(contents, key=len)[:300]
+    if fields.get("description") and not fields.get("name"):
+        words = str(fields["description"]).split()
+        fields["name"] = " ".join(words[:5]).strip(" ,.-").title()
+
+    if not str(fields.get("quantity") or "").strip():
+        m = (re.search(r"(\d+(?:\.\d+)?)\s*(?:units?|pcs|pieces|pieces)", low)
+             or re.search(r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b\s*\w*\s*(?:units?|pcs|pieces)", low)
+             or re.search(r"\b(?:quantity|qty)[:,]?\s*(\d+)", low))
+        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                 "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+        if not m:
+            m2 = re.findall(r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\b", low)
+            if m2:
+                fields["quantity"] = float(words[m2[-1]])
+        else:
+            token = (m.group(1) or m.group(0)).lower().strip()
+            try:
+                fields["quantity"] = float(words.get(token, token))
+            except ValueError:
+                pass
+
+    if not str(fields.get("material_finish") or "").strip():
+        for kw in ("stainless steel", "mild steel", "stainless",
+                   "aluminium", "aluminum", "galvanised", "galvanized",
+                   "high-temp black paint", "shop paint", "painted"):
+            idx = low.find(kw)
+            if idx != -1:
+                fields["material_finish"] = blob[idx:idx + 80].strip()
+                break
 @router.post("/{session_id}/message")
+
 def message(session_id: int, body: MessageIn,
             user: User = Depends(get_current_user),
             session: Session = Depends(get_session)):
@@ -140,6 +189,9 @@ def message(session_id: int, body: MessageIn,
 
     stored = cs.collected_json or {}
     fields = _merge_fields(stored, stored.get("pending_data"))
+    _heuristic_fill(session, cs, fields, extra_text=body.text)
+    import logging as _lg
+    _lg.warning("INTAKE state: %s | client said: %s", fields, body.text[:80])
 
     # deterministic guided fallback when every provider is down
     if stored.get("guided") or not configured_chain():
@@ -178,6 +230,7 @@ def message(session_id: int, body: MessageIn,
 
     # merge whatever the model extracted this turn into server-side state
     fields = _merge_fields(fields, data.get("data"))
+    _heuristic_fill(session, cs, fields, extra_text=body.text)
     missing_required = [k for k in REQUIRED if k not in fields]
 
     # name derives from description — clients shouldn't have to name things

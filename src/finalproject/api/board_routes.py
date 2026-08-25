@@ -109,6 +109,11 @@ def estimate_spec(code: str,
     approval = approvals_svc.queue_plan_release(session, est, project)
     return {
         "spec": code,
+        "spec_title": spec.title,
+        "account": (session.get(Account, spec.account_id).name
+                    if session.get(Account, spec.account_id) else ""),
+        "estimated_finish": (project.estimated_finish.isoformat()
+                             if project.estimated_finish else None),
         "project": project.code,
         "estimate_version": version,
         "decision": result.decision,
@@ -266,3 +271,48 @@ def my_assignments(user: User = Depends(get_current_user),
                                      if p.estimated_finish else None)
         out.append(entry)
     return {"projects": out}
+
+
+@router.get("/timeline")
+def timeline(user: User = Depends(require_roles("engineer", "manager", "viewer")),
+             session: Session = Depends(get_session)):
+    """Manager map: every project laid over the coming capacity weeks."""
+    from finalproject.db.models import CapacityWeek
+
+    weeks = session.scalars(
+        select(CapacityWeek).order_by(CapacityWeek.start_date)).all()
+    week_labels = [w.week_label for w in weeks]
+    week_free = {w.week_label: w.total_hours - w.booked_hours for w in weeks}
+
+    projects = session.scalars(select(Project)).all()
+    rows = []
+    for p in projects:
+        schedule = None
+        est = session.scalar(
+            select(Estimate).where(Estimate.project_id == p.id)
+            .order_by(Estimate.version.desc()))
+        if est:
+            schedule = (est.citations_json or {}).get("schedule")
+        engineer = (session.get(User, p.assigned_engineer_id)
+                    if p.assigned_engineer_id else None)
+        ev = tracking.current_event(session, p)
+        row = _project_out(p, ev)
+        row.update({
+            "engineer": engineer.full_name if engineer else None,
+            "fab_weeks": (schedule or {}).get("bookings") or [],
+            "install_week": (schedule or {}).get("install_week_label"),
+            "planned_finish": (schedule or {}).get("planned_finish"),
+        })
+        rows.append(row)
+
+    account_names = {}
+    for r in rows:
+        proj = session.scalar(select(Project).where(Project.code == r["code"]))
+        if proj and proj.account_id:
+            acc = session.get(Account, proj.account_id)
+            r["client"] = acc.name if acc else ""
+    return {"weeks": [
+                {"label": wl, "free_hours": week_free[wl]}
+                for wl in week_labels
+            ],
+            "projects": rows}

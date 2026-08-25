@@ -6,11 +6,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finalproject.db.models import (
+    Account,
     Approval,
     CapacityWeek,
     Estimate,
     Project,
     StageEvent,
+    User,
 )
 
 # Clause 4.1 — the stages, in order
@@ -152,10 +154,24 @@ def daily_summary(session: Session) -> dict:
         select(Approval).where(Approval.decision == "pending")
     ).all()
 
+    detail = []
+    for p in projects:
+        if p.stage == "Closed":
+            continue
+        acc = session.get(Account, p.account_id) if p.account_id else None
+        eng = (session.get(User, p.assigned_engineer_id)
+               if p.assigned_engineer_id else None)
+        detail.append({
+            "code": p.code, "title": p.title, "stage": p.stage,
+            "status": p.status, "client": acc.name if acc else "",
+            "engineer": eng.full_name if eng else None,
+        })
+
     return {
         "type": "DRAFT_SUMMARY",
         "projects_by_stage": by_stage,
         "active_projects": len([p for p in projects if p.stage != "Closed"]),
+        "projects_detail": detail,
         "overdue": overdue_projects(session),
         "blocked_on_materials": blocked_projects(session),
         "capacity": capacity_ahead(session),

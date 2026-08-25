@@ -117,6 +117,28 @@ export default function Summary() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
+        <section className="border border-border bg-card p-5">
+          <h3 className="mb-3 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Project register — every active project</h3>
+          <table className="w-full border-collapse">
+            <thead><tr className="border-b border-border">
+              {["Code","Title","Client","Stage","Status","Engineer"].map((h) => (
+                <th key={h} className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{h}</th>))}
+            </tr></thead>
+            <tbody>
+              {(data.projects_detail || []).map((d) => (
+                <tr key={d.code} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2 font-mono text-xs font-bold text-foreground">{d.code}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-foreground">{d.title}</td>
+                  <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{d.client}</td>
+                  <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{d.stage}</td>
+                  <td className={`px-3 py-2 font-mono text-[11px] ${d.status === "overdue" ? "text-destructive" : d.status === "blocked_material" ? "text-chart-2" : "text-muted-foreground"}`}>{d.status}</td>
+                  <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{d.engineer || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
         <IssueList title="Overdue projects" icon={Timer}
                    tone="text-destructive" empty="Nothing overdue."
                    items={data.overdue.map((p) => ({ ...p, detail: p.planned_finish ? `was due ${p.planned_finish}` : "" }))} />

@@ -16,7 +16,9 @@ export default function Board() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const isManager = getUser()?.role === "manager";
+  const [user, setUser] = useState(null);
+  useEffect(() => setUser(getUser()), []);
+  const isManager = user?.role === "manager";
 
   const load = useCallback(async () => {
     try { setData(await api("/board")); } catch (e) { setError(e.message); }

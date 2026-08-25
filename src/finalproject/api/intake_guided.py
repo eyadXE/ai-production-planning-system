@@ -2,7 +2,6 @@
 rule-driven so the feature cannot fail when every provider is down."""
 
 import re
-from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -99,11 +98,13 @@ def guided_turn(session: Session, cs, user: User, stored: dict,
         if not m:
             return {"llm": False,
                     "reply": "Please enter a number (e.g. 2)."}
-        token = m.group(0)
-        words = {"one":1,"two":2,"three":3,"four":4,"five":5,
-                 "six":6,"seven":7,"eight":8,"nine":9,"ten":10}
-        value = float(words[token.lower()]) if token.lower() in words else float(token)
-        fields["quantity"] = value
+        token = m.group(0).lower()
+        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                 "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+        try:
+            fields["quantity"] = float(words.get(token, token))
+        except ValueError:
+            return {"llm": False, "reply": "Please enter a number (e.g. 2)."}
         save("material_finish")
         return {"llm": False,
                 "reply": ("Material & finish? e.g. 'mild steel painted RAL "
