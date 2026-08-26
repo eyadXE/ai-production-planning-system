@@ -1,7 +1,8 @@
 """Conversational custom-work intake — LLM conducts the interview.
 
-Server owns collected-state. When every provider fails, the deterministic
-guided interview takes over automatically — the chat can never dead-end.
+When complete, returns collected fields to the frontend for cart storage.
+The client keeps shopping and submits everything at checkout.
+Falls back to deterministic guided interview when all providers fail.
 """
 
 import json
@@ -15,19 +16,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finalproject.auth.dependencies import get_current_user
-from finalproject.api.intake_guided import guided_turn
-from finalproject.api.intake_routes import next_spec_code
 from finalproject.db.database import get_session
-from finalproject.db.models import ChatMessage, ChatSession, Spec, User
+from finalproject.api.intake_guided import guided_turn
+from finalproject.db.models import ChatMessage, ChatSession, User
 from finalproject.llm.base import configured_chain
 from finalproject.llm.client import LLMClient, extract_json
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/intake", tags=["intake"])
-
-VALID_KINDS = {"railing", "mezzanine", "flight", "gate_double", "gate_single",
-               "security_door", "caged_ladder", "support_frame",
-               "racking_bay", "canopy", "floor_plate_area"}
 
 REQUIRED_FIELDS = ("description", "quantity", "material_finish")
 OPTIONAL_FIELDS = ("site", "required_raw")
@@ -39,7 +35,7 @@ fields from the client one at a time:
 - quantity: how many units
 - material_finish: material + finish (suggest default if unsure)
 - site: delivery/installation location
-- required_raw: deadline phrase (optional)
+- required_raw: deadline phrase
 
 RULES:
 - Ask ONE missing field per message.
@@ -65,27 +61,6 @@ def _history(db: Session, cs) -> str:
     return "\n".join(f"{m.role.upper()}: {m.content}" for m in msgs[-8:])
 
 
-def _merge_fields(stored: dict, data: dict | None) -> dict:
-    fields = dict((stored or {}).get("fields") or {})
-    for k, v in (data or {}).items():
-        if v not in (None, ""):
-            fields[k] = str(v).strip()
-    return fields
-
-
-def _context(fields: dict, photo: str | None) -> str:
-    known = dict(fields)
-    if known.get("description") and not known.get("name"):
-        words = known["description"].split()
-        known["name"] = " ".join(words[:5]).strip(" ,.-").title()
-    missing = [k for k in REQUIRED_FIELDS if k not in known]
-    lines = [f"KNOWN: {json.dumps(known, ensure_ascii=False)}",
-             f"MISSING: {missing or 'nothing — summarise & confirm'}"]
-    if photo:
-        lines.append("A reference photo was attached.")
-    return "\n".join(lines)
-
-
 @router.post("/start")
 def start_chat(user: User = Depends(get_current_user),
                session: Session = Depends(get_session)):
@@ -100,8 +75,7 @@ def start_chat(user: User = Depends(get_current_user),
 
     greeting = ("Hi! I'm the Ousus assistant. Tell me what you'd "
                 "like us to build.")
-    llm_ok = bool(configured_chain())
-    if llm_ok:
+    if configured_chain():
         try:
             cl = LLMClient()
             resp = cl.complete("The client just opened the chat.")
@@ -113,7 +87,7 @@ def start_chat(user: User = Depends(get_current_user),
 
     session.add(ChatMessage(session_id=cs.id, role="assistant", content=greeting))
     session.commit()
-    return {"session_id": cs.id, "reply": greeting, "llm": llm_ok}
+    return {"session_id": cs.id, "reply": greeting, "llm": bool(configured_chain())}
 
 
 class PhotoIn(BaseModel):
@@ -136,39 +110,12 @@ def attach_photo(session_id: int, body: PhotoIn,
     return {"ok": True}
 
 
-def _create_custom_spec(session: Session, cs, user: User, fields: dict,
-                        photo: str | None) -> dict:
-    """Create the spec from fully-collected chat fields."""
-    code = next_spec_code(session)
-    name = fields.get("name") or fields.get("description", "")[:60].title()
-    desc = fields.get("description", "")
-    material = fields.get("material_finish") or ""
-    structured = {
-        "items": [],
-        "custom": [{"name": name, "description": desc,
-                     "photo": photo or "", "quantity": fields.get("quantity", 1),
-                     "material_finish": material}],
-        "finish": material,
-        "site": fields.get("site") or "",
-        "required_raw": fields.get("required_raw") or "",
-    }
-    spec = Spec(
-        code=code, account_id=user.account_id,
-        title=name[:200], raw_text=f"Custom: {desc}",
-        structured_json=structured,
-        source="chat_intake", status="pending_review",
-    )
-    session.add(spec)
-    cs.status = "submitted"
-    cs.collected_json = {"fields": fields, "photo": photo}
-    session.commit()
-    return {"code": code, "status": spec.status}
-
-
 @router.post("/{session_id}/message")
 def chat_message(session_id: int, body: MessageIn,
                  user: User = Depends(get_current_user),
                  session: Session = Depends(get_session)):
+    """Chat with assistant. When complete, returns collected custom_line
+    for the frontend to add to localStorage cart — does NOT submit."""
     cs = session.get(ChatSession, session_id)
     if not cs or cs.user_id != user.id:
         raise HTTPException(404, "chat session not found")
@@ -180,7 +127,7 @@ def chat_message(session_id: int, body: MessageIn,
     stored = dict(cs.collected_json or {})
     fields = _merge_fields(stored, stored.get("pending_data"))
 
-    # try LLM first
+    # try LLM
     if configured_chain():
         prompt = (_history(session, cs) +
                   f"\nCLIENT: {body.text}" +
@@ -190,14 +137,27 @@ def chat_message(session_id: int, body: MessageIn,
         if resp:
             data = extract_json(resp.content)
             if data and data.get("reply"):
-                # merge model-extracted fields
                 new_fields = _merge_fields(fields, data.get("data"))
                 missing = [f for f in REQUIRED_FIELDS if f not in new_fields]
                 if data.get("complete") and not missing:
-                    result = _create_custom_spec(session, cs, user,
-                                                 new_fields,
-                                                 stored.get("photo"))
-                    return {**result, "llm": True}
+                    # return collected fields — frontend adds to cart
+                    cs.status = "collected"
+                    cs.collected_json = {"fields": new_fields,
+                                         "photo": stored.get("photo", "")}
+                    session.commit()
+                    return {"llm": True, "complete": True,
+                            "custom_line": {
+                                "name": new_fields.get("name",
+                                    new_fields["description"][:60].title()),
+                                "description":
+                                    new_fields.get("description", ""),
+                                "photo": stored.get("photo", ""),
+                                "quantity": float(new_fields.get(
+                                    "quantity", 1)),
+                                "material_finish": new_fields.get(
+                                    "material_finish", ""),
+                            },
+                            "reply": data["reply"]}
                 session.add(ChatMessage(session_id=cs.id,
                                         role="assistant",
                                         content=data["reply"]))
@@ -206,19 +166,13 @@ def chat_message(session_id: int, body: MessageIn,
                 return {"llm": True, "complete": False,
                         "reply": data["reply"]}
 
-    # all providers failed -> deterministic guided interview
+    # all providers failed -> guided fallback
     stored["guided"] = True
     cs.collected_json = stored
     session.commit()
     result = guided_turn(session, cs, user, stored, fields, body.text)
     result["guided"] = True
     return result
-
-
-def next_spec_code(session: Session) -> str:
-    codes = session.scalars(select(Spec.code)).all()
-    nums = [int(m.group(1)) for c in codes if (m := re.match(r"J-(\d+)", c))]
-    return f"J-{max(nums, default=0) + 1:03d}"
 
 
 @router.get("/sessions/mine")

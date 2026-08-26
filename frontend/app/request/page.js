@@ -144,7 +144,16 @@ export default function RequestPage() {
         method: "POST", body: { text },
       });
       cPush("assistant", out.reply);
-      if (out.complete && out.code) setChatDoneCode(out.code);
+      if (out.complete && out.custom_line) {
+        addCustom({
+          name: out.custom_line.name || "Custom build",
+          description: out.custom_line.description || "",
+          photo: "",
+          quantity: out.custom_line.quantity || 1,
+          material_finish: out.custom_line.material_finish || "",
+        });
+        setChatDoneCode(true);
+      }
     } catch (e) {
       cPush("assistant", e.message);
     } finally { setChatBusy(false); }

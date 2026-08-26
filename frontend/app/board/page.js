@@ -90,7 +90,7 @@ export default function Board() {
                           Advance <ArrowRight className="size-3" />
                         </button>
                       )}
-                      {isManager && p.stage !== "Closed" && p.release_status !== "released" && (
+                      {isManager && p.release_status === "draft" && (
                         <button onClick={() => remove(p.code)} disabled={busy === p.code}
                                 className="mt-1 flex w-full items-center justify-center border border-destructive/30 py-1.5 font-mono text-[9px] text-destructive hover:bg-destructive/10 disabled:opacity-50">
                           Delete

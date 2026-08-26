@@ -382,7 +382,7 @@ def decide_request(code: str, body: EstimatorDecision,
     required = parsed.deadline
     project = Project(
         code=spec.code, account_id=spec.account_id, spec_id=spec.id,
-        title=spec.title or spec.code, stage="Production Planning",
+        title=spec.title or spec.code, stage="Award",
         status="on_track", required_date=required, release_status="queued",
     )
     if result.schedule and result.schedule.get("planned_finish"):
@@ -461,7 +461,7 @@ def _create_project_from_spec(session: Session, spec) -> str:
         account_id=spec.account_id,
         spec_id=spec.id,
         title=spec.title or spec.code,
-        stage="Production Planning",
+        stage="Award",
         status="on_track",
         release_status="na",
         required_date=None,

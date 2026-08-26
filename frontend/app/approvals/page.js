@@ -9,6 +9,7 @@ export default function Approvals() {
   const [audit, setAudit] = useState([]);
   const [awaitingClient, setAwaitingClient] = useState([]);
   const [readyToRelease, setReadyToRelease] = useState([]);
+  const [engineers, setEngineers] = useState([]);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
@@ -17,7 +18,9 @@ export default function Approvals() {
     try {
       setItems(await api("/approvals"));
       setAudit(await api("/audit"));
-      const board = await api("/board");
+      const [board, engs] = await Promise.all([
+        api("/board"), api("/team/engineers")]);
+      setEngineers(engs);
       const all = Object.values(board.columns).flat();
       setAwaitingClient(all.filter((p) => p.release_status === "manager_approved"));
       setReadyToRelease(all.filter((p) => p.release_status === "client_accepted"));
@@ -64,13 +67,29 @@ export default function Approvals() {
             <input value={note} onChange={(e) => setNote(e.target.value)}
                    placeholder="materials verified / capacity confirmed…"
                    className="w-full border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground" />
-            <div className="mt-3 flex gap-2">
-              <button disabled={busy === String(a.id)} onClick={() => decide(a.id, true)}
-                      className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">
-                Approve → send to client
+            <div className="mt-3 flex flex-wrap gap-2 items-end">
+              <div>
+                <label className="mb-1 block font-mono text-[9px] uppercase text-muted-foreground">Assign engineer</label>
+                <select id={"assign-" + a.id} defaultValue=""
+                        className="border border-border bg-background px-2 py-2 font-mono text-[11px] text-foreground w-44">
+                  <option value="" disabled>Choose…</option>
+                  {engineers.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+              </div>
+              <button disabled={busy === String(a.id)} onClick={() => {
+                  const sel = document.getElementById("assign-" + a.id);
+                  const eid = sel ? Number(sel.value) : null;
+                  if (!eid) { setError("assign an engineer first"); return; }
+                  Promise.all([
+                    api(`/projects/${a.note.split(" ")[2]}/assign`, { method: "POST", body: { engineer_id: eid } }),
+                    decide(a.id, true),
+                  ]).catch((e) => setError(e.message));
+                }}
+                className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50 self-end">
+                Approve &amp; assign → client
               </button>
               <button disabled={busy === String(a.id)} onClick={() => decide(a.id, false)}
-                      className="border border-destructive/40 px-4 py-2.5 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">
+                      className="border border-destructive/40 px-4 py-2.5 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50 self-end">
                 Reject
               </button>
             </div>
