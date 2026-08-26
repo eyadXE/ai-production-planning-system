@@ -47,10 +47,12 @@ export default function Board() {
       return <span className="border border-chart-2/40 px-1.5 py-0.5 font-mono text-[9px] text-chart-2">BLOCKED</span>;
     if (p.release_status === "released")
       return <span className="border border-primary/40 px-1.5 py-0.5 font-mono text-[9px] text-primary">RELEASED</span>;
+    if (p.release_status === "pending_manager_review")
+      return <span className="border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">MANAGER REVIEW</span>;
     if (p.release_status === "queued")
-      return <span className="border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">IN GATE</span>;
-    if (p.release_status === "manager_approved")
-      return <span className="border border-chart-2/40 px-1.5 py-0.5 font-mono text-[9px] text-chart-2">CLIENT REVIEW</span>;
+      return <span className="border border-chart-2/40 px-1.5 py-0.5 font-mono text-[9px] text-chart-2">AWAITING CLIENT</span>;
+    if (p.release_status === "client_accepted")
+      return <span className="border border-primary/40 px-1.5 py-0.5 font-mono text-[9px] text-primary">READY TO RELEASE</span>;
     return null;
   }
 

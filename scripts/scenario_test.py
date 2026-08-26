@@ -71,65 +71,51 @@ check("4a estimator cannot decide request", s == 403)
 
 s, r = req(f"/requests/{code}/manager-decision", "POST", MGR,
            {"approved": True})
-aid = r.get("approval_id", 0)
-check("4b manager approves request -> plan queued for client",
-      s == 200 and r.get("release_status") == "queued" and aid > 0,
+check("4b manager approves request -> offer queued for client",
+      s == 200 and r.get("release_status") == "queued",
       str(r)[:120])
 
 # Verify board shows queued (waiting on the client)
 _, board = req("/board", "GET", MGR)
 queued_items = [p for col in board["columns"].values() for p in col
                 if p["code"] == code]
-check("4c board shows queued (awaiting client)",
+check("4c board shows AWAITING CLIENT",
       queued_items and queued_items[0]["release_status"] == "queued")
 
-# The release gate stays shut until the client accepts
-s, _ = req(f"/approvals/{aid}/decision", "POST", MGR, {"approved": True})
-check("4d gate blocked before client acceptance", s == 409)
-
-# Step 5: Client accepts from dashboard
+# Step 5: Client accepts from dashboard -> ONLY NOW it is releasable
 s, j = req(f"/my/projects/{code}/decision", "POST", CLI, {"accept": True})
-check("5 client accepts plan",
+check("5 client accepts offer",
       s == 200 and j.get("release_status") == "client_accepted")
-
-# Step 6: Manager opens the release gate
-s, j = req(f"/approvals/{aid}/decision", "POST", MGR,
-           {"approved": True, "note": "verified"})
-check("6 manager approves at the gate",
-      s == 200 and j["decision"] == "approved")
-
-# Verify status is manager_approved
-_, board = req("/board", "GET", MGR)
-items = [p for col in board["columns"].values() for p in col if p["code"] == code]
-check("6b release_status is manager_approved",
-      items and items[0]["release_status"] == "manager_approved",
-      str(items[0]["release_status"] if items else "?"))
 
 # not in the timeline yet — only released projects appear
 _, tl = req("/timeline", "GET", MGR)
-check("6c timeline hides unreleased project",
+check("5b timeline hides unreleased project",
       all(p["code"] != code for p in tl["projects"]))
 
-# Step 7: Assign engineer BEFORE release
+# release without an assigned engineer fails
+s, _ = req(f"/projects/{code}/release", "POST", MGR)
+check("5c release blocked until engineer assigned", s == 409)
+
+# Step 6: Assign engineer on the Release page flow
 _, eng_list = req("/team/engineers", "GET", MGR)
 assigned_eng_email = eng_list[0]["email"]
 s, _ = req(f"/projects/{code}/assign", "POST", MGR,
            {"engineer_id": eng_list[0]["id"]})
-check("7 manager assigns engineer", s == 200)
+check("6 manager assigns engineer", s == 200)
 
-# Step 8: Manager releases -> NOW it appears in the timeline
+# Step 7: Manager releases -> NOW it appears in the timeline
 s, j = req(f"/projects/{code}/release", "POST", MGR)
-check("8 manager releases after gate",
+check("7 manager releases after client acceptance",
       s == 200 and j.get("release_status") == "released")
 _, tl = req("/timeline", "GET", MGR)
-check("8b released project appears in timeline",
+check("7b released project appears in timeline",
       any(p["code"] == code for p in tl["projects"]))
 
-# Step 9: Cannot delete released order
+# Step 8: Cannot delete released order
 s, _ = req(f"/projects/{code}", "DELETE", MGR)
-check("9 released order cannot be deleted", s == 403)
+check("8 released order cannot be deleted", s == 403)
 
-# Step 10: Assigned engineer walks stagesENG = MGR  # manager can always advance
+# Step 9: Assigned engineer walks stagesENG = MGR  # manager can always advance
 for expected in STAGES[1:]:
     s, j = req(f"/projects/{code}/stage", "PATCH", ENG, {})
     check(f"10 advance -> {j.get('stage', expected)}",
@@ -168,6 +154,55 @@ rr = req("/requests/rejected", "GET", MGR)[1]
 row = next((x for x in rr if x["code"] == rc), None)
 check("R3 rejection visible to manager with reason",
       row is not None and bool(row.get("note")))
+
+print("\n=== CUSTOM TWO-LEVEL PIPELINE ===")
+s, r = req("/requests", "POST", CLI, {
+    "title": "Custom flow test", "items": [],
+    "custom": [{"name": "Art gate", "description": "decorative 3 m gate"}],
+    "finish": "", "site": "Giza", "required_raw": ""})
+cc = r["code"]
+check("C1 client submits custom request", s == 200 and cc)
+
+# run-estimate returns NO fabricated figures
+s, j = req(f"/requests/{cc}/run-estimate", "POST", EST)
+check("C2 manual plan has no engine figures",
+      j.get("decision") == "MANUAL_PLAN" and j.get("needs_manual_planning")
+      and not j.get("final_price_egp"), str(j)[:120])
+
+# plain estimator approve is blocked
+s, _ = req(f"/requests/{cc}/decision", "POST", EST, {"approved": True})
+check("C3 approve blocked before engineering input", s == 409)
+
+# level 1: estimator fills scope + hours
+s, j = req(f"/requests/{cc}/custom/estimator-info", "POST", EST,
+           {"scope": "decorative gate 3m SHS frame",
+            "materials_note": "SHS + mesh, shop paint",
+            "fab_hours": 80, "install_hours": 20})
+check("C4 estimator completes level 1",
+      s == 200 and j.get("release_status") == "pending_manager_review",
+      str(j)[:120])
+
+# manager must complete pricing (level 2) before approving
+s, _ = req(f"/requests/{cc}/manager-decision", "POST", MGR,
+           {"approved": True})
+check("C5 manager pricing required", s == 422)
+
+s, j = req(f"/requests/{cc}/manager-decision", "POST", MGR,
+           {"approved": True, "material_cost_egp": 12000,
+            "margin_applied": 22, "planned_finish": "2026-11-15"})
+check("C6 manager completes level 2 -> offer to client",
+      s == 200 and j.get("release_status") == "queued", str(j)[:120])
+
+s, j = req(f"/my/projects/{cc}/decision", "POST", CLI, {"accept": True})
+check("C7 client accepts custom offer",
+      s == 200 and j.get("release_status") == "client_accepted")
+
+_, eng_list = req("/team/engineers", "GET", MGR)
+req(f"/projects/{cc}/assign", "POST", MGR,
+    {"engineer_id": eng_list[0]["id"]})
+s, j = req(f"/projects/{cc}/release", "POST", MGR)
+check("C8 assign & release custom order",
+      s == 200 and j.get("release_status") == "released")
 
 print("\n=== NEGATIVE TESTS ===")
 # viewer cannot advance

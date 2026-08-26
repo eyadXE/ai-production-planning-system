@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Box, CalendarDays, FileCheck2, Hammer,
-  LayoutDashboard, MessageSquare, UserCheck, X, Menu, LogOut,
+  LayoutDashboard, MessageSquare, X, Menu, LogOut,
 } from "lucide-react";
 import { clearSession, getUser } from "../lib/api";
 import ThemeToggle from "./ThemeToggle";
@@ -25,9 +25,8 @@ const NAV = {
   manager: [
     { href: "/summary", label: "Overview", icon: LayoutDashboard },
     { href: "/review", label: "Requests", icon: MessageSquare },
-    { href: "/approvals", label: "Approvals & Release", icon: FileCheck2 },
-    { href: "/assign", label: "Assign Engineers", icon: UserCheck },
-    { href: "/board", label: "Projects", icon: Box },
+    { href: "/approvals", label: "Release", icon: FileCheck2 },
+    { href: "/board", label: "Projects (view)", icon: Box },
     { href: "/timeline", label: "Timeline", icon: CalendarDays },
   ],
   viewer: [

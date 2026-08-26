@@ -143,8 +143,20 @@ def _new_request(client_user, title):
     return r.json()["code"]
 
 
-def _walk_to_gate(code, estimator, manager, client_user):
-    """run-estimate -> estimator approves -> manager approves -> client accepts."""
+def _new_request(client_user, title, custom=False):
+    body = {"title": title,
+            "items": [] if custom else [{"kind": "railing", "qty": 10}],
+            "custom": ([{"name": "Art piece",
+                         "description": "decorative custom build"}]
+                       if custom else []),
+            "finish": "", "site": "test site", "required_raw": ""}
+    r = client.post("/requests", headers=client_user, json=body)
+    assert r.status_code == 200, r.text
+    return r.json()["code"]
+
+
+def _catalog_to_queued(code, estimator, manager):
+    """run-estimate -> estimator approves -> manager approves."""
     r = client.post(f"/requests/{code}/run-estimate", headers=estimator)
     assert r.status_code == 200, r.text
     r = client.post(f"/requests/{code}/decision",
@@ -154,17 +166,13 @@ def _walk_to_gate(code, estimator, manager, client_user):
     r = client.post(f"/requests/{code}/manager-decision",
                     json={"approved": True}, headers=manager)
     assert r.status_code == 200, r.text
-    approval_id = r.json()["approval_id"]
-    r = client.post(f"/my/projects/{code}/decision",
-                    json={"accept": True}, headers=client_user)
-    assert r.status_code == 200, r.text
-    return approval_id
+    assert r.json()["release_status"] == "queued"
 
 
 def test_full_new_flow_manager_decides_before_client(estimator, manager,
                                                      client_user):
     """Estimator approves -> manager approves/rejects in Requests ->
-    client accepts -> THEN the plan sits in the release gate."""
+    then (and only then) the offer goes to the client."""
     code = _new_request(client_user, "flow order test")
     r = client.post(f"/requests/{code}/run-estimate", headers=estimator)
     assert r.status_code == 200, r.text
@@ -194,52 +202,6 @@ def test_full_new_flow_manager_decides_before_client(estimator, manager,
     assert row and row[0]["release_status"] == "queued"
 
 
-def test_manager_must_open_the_gate(manager, engineer, estimator, client_user):
-    code = _new_request(client_user, "gate test")
-    aid = _walk_to_gate(code, estimator, manager, client_user)
-
-    # gate cannot open before the client accepted — already satisfied here;
-    # engineer can never open it though
-    r = client.post(f"/approvals/{aid}/decision",
-                    json={"approved": True}, headers=engineer)
-    assert r.status_code == 403
-
-    r = client.post(f"/approvals/{aid}/decision",
-                    json={"approved": True, "note": "materials verified"},
-                    headers=manager)
-    assert r.status_code == 200
-    board = client.get("/board", headers=manager).json()["columns"]
-    row = [p for col in board.values() for p in col if p["code"] == code]
-    assert row and row[0]["release_status"] == "manager_approved"
-
-
-def test_gate_blocked_until_client_accepts(manager, estimator, client_user):
-    code = _new_request(client_user, "gate order test")
-    r = client.post(f"/requests/{code}/run-estimate", headers=estimator)
-    assert r.status_code == 200
-    r = client.post(f"/requests/{code}/decision",
-                    json={"approved": True}, headers=estimator)
-    assert r.status_code == 200
-    r = client.post(f"/requests/{code}/manager-decision",
-                    json={"approved": True}, headers=manager)
-    aid = r.json()["approval_id"]
-
-    # the gate stays shut until the CLIENT accepts the plan
-    r = client.post(f"/approvals/{aid}/decision",
-                    json={"approved": True}, headers=manager)
-    assert r.status_code == 409
-    assert "client" in r.json()["detail"].lower()
-
-    r = client.post(f"/my/projects/{code}/decision",
-                    json={"accept": True}, headers=client_user)
-    assert r.status_code == 200 and \
-        r.json()["release_status"] == "client_accepted"
-
-    r = client.post(f"/approvals/{aid}/decision",
-                    json={"approved": True}, headers=manager)
-    assert r.status_code == 200
-
-
 def test_manager_can_reject_a_request(estimator, manager, client_user):
     code = _new_request(client_user, "manager reject test")
     client.post(f"/requests/{code}/run-estimate", headers=estimator)
@@ -262,25 +224,107 @@ def test_manager_can_reject_a_request(estimator, manager, client_user):
     assert row is not None and "[manager]" in row["note"]
 
 
-def test_double_decision_rejected(manager, estimator, client_user):
-    code = _new_request(client_user, "double decide test")
-    aid = _walk_to_gate(code, estimator, manager, client_user)
-    client.post(f"/approvals/{aid}/decision",
-                json={"approved": False}, headers=manager)
-    r = client.post(f"/approvals/{aid}/decision",
-                    json={"approved": True}, headers=manager)
+def test_release_needs_client_acceptance_then_engineer(manager, estimator,
+                                                       client_user):
+    """Client accepts -> Release page (assign + release) -> timeline."""
+    code = _new_request(client_user, "release order test")
+    _catalog_to_queued(code, estimator, manager)
+
+    # cannot release while only queued (client has not accepted yet)
+    r = client.post(f"/projects/{code}/release", headers=manager)
     assert r.status_code == 409
+
+    r = client.post(f"/my/projects/{code}/decision",
+                    json={"accept": True}, headers=client_user)
+    assert r.status_code == 200 and \
+        r.json()["release_status"] == "client_accepted"
+
+    # cannot release without an assigned project engineer
+    r = client.post(f"/projects/{code}/release", headers=manager)
+    assert r.status_code == 409
+    assert "assign" in r.json()["detail"].lower()
+
+    eng_list = client.get("/team/engineers", headers=manager).json()
+    r = client.post(f"/projects/{code}/assign",
+                    json={"engineer_id": eng_list[0]["id"]}, headers=manager)
+    assert r.status_code == 200
+
+    r = client.post(f"/projects/{code}/release", headers=manager)
+    assert r.status_code == 200 and r.json()["release_status"] == "released"
+
+    tl = client.get("/timeline", headers=manager).json()
+    assert any(p["code"] == code for p in tl["projects"])
+
+    # released orders are permanent
+    assert client.delete(f"/projects/{code}",
+                         headers=manager).status_code == 403
+
+
+def test_custom_request_two_level_manual_plan(estimator, manager, client_user):
+    """Custom builds have NO engine figures: estimator fills engineering
+    input, manager completes pricing & schedule, then normal pipeline."""
+    code = _new_request(client_user, "custom two level test", custom=True)
+
+    # a plain estimator approve is NOT enough for custom requests
+    r = client.post(f"/requests/{code}/decision",
+                    json={"approved": True}, headers=estimator)
+    assert r.status_code == 409
+    assert "custom" in r.json()["detail"].lower()
+
+    # level 1 — estimator fills scope + hours (only he can)
+    r = client.post(f"/requests/{code}/custom/estimator-info",
+                    json={"scope": "decorative gate 3 m, SHS frame",
+                          "materials_note": "SHS + mesh infill, shop paint",
+                          "fab_hours": 80, "install_hours": 20},
+                    headers=estimator)
+    assert r.status_code == 200, r.text
+    assert r.json()["release_status"] == "pending_manager_review"
+
+    # it shows in the manager's queue flagged as needing pricing
+    awaiting = client.get("/requests/awaiting-decision",
+                          headers=manager).json()
+    row = next((a for a in awaiting if a["code"] == code), None)
+    assert row is not None and row["needs_pricing"] is True
+    assert row["estimator_plan"]["fab_hours"] == 80
+
+    # level 2 cannot be skipped
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": True}, headers=manager)
+    assert r.status_code == 422
+
+    # level 2 — manager fills material cost / margin / finish date
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": True, "material_cost_egp": 12000,
+                          "margin_applied": 22,
+                          "planned_finish": "2026-11-01"},
+                    headers=manager)
+    assert r.status_code == 200, r.text
+    assert r.json()["release_status"] == "queued"
+
+    # price computed from both levels: (12000 + 480 + 10000) * 1.22 = 27345.6
+    mine = client.get("/my/projects", headers=client_user).json()
+    proj = next(p for p in mine["projects"] if p["code"] == code)
+    assert proj["estimated_finish"] is not None
+
+    # resume the normal pipeline: client accepts -> assign -> release
+    r = client.post(f"/my/projects/{code}/decision",
+                    json={"accept": True}, headers=client_user)
+    assert r.status_code == 200
+    eng_list = client.get("/team/engineers", headers=manager).json()
+    client.post(f"/projects/{code}/assign",
+                json={"engineer_id": eng_list[0]["id"]}, headers=manager)
+    r = client.post(f"/projects/{code}/release", headers=manager)
+    assert r.status_code == 200 and r.json()["release_status"] == "released"
 
 
 def test_audit_trail_names_the_approver(manager, estimator, client_user):
     code = _new_request(client_user, "audit trail test")
-    aid = _walk_to_gate(code, estimator, manager, client_user)
-    client.post(f"/approvals/{aid}/decision",
-                json={"approved": True}, headers=manager)
+    _catalog_to_queued(code, estimator, manager)
     audit = client.get("/audit", headers=manager).json()
     assert audit, "decisions recorded"
     decided = [a for a in audit if a["decision"] != "pending"]
-    assert all(a["at"] for a in decided)
+    assert decided, "manager decisions are recorded"
+    assert all(a["at"] and a["approver_id"] for a in decided)
 
 
 def test_refusal_specs_never_queue(estimator):

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from finalproject.auth.dependencies import get_current_user, require_roles
 from finalproject.db.database import get_session
-from finalproject.db.models import Account, Estimate, Material, Project, Spec, StageEvent, User
+from finalproject.db.models import Account, Approval, Estimate, Material, Project, Spec, StageEvent, User
 from finalproject.engine.estimator import estimate as run_estimate
 from finalproject.engine.parser import Item, parse_deadline, parse_spec
 from finalproject.tracking import approvals as approvals_svc
@@ -210,36 +210,16 @@ def run_estimate_endpoint(code: str,
             # manual-plan path handled at decision time
             pass
 
-    # custom-only requests get a manual-plan estimate with realistic
-    # placeholder data so the estimator has something to review
+    # custom-only requests have NO engine figures — they are planned
+    # manually in two levels (estimator fills his part, then the manager)
     if structured.get("custom") and not parsed.items:
         customs = structured.get("custom") or []
-        total_desc = " ".join(c.get("description", "") for c in customs).lower()
-        # rough estimation heuristics
-        base_hours = 40 + len(customs) * 20  # min 60h for any custom job
-        if "large" in total_desc or "industrial" in total_desc:
-            base_hours += 80
-        fab_h = float(base_hours)
-        inst_h = round(fab_h * 0.25, 1)
-        mat_cost = len(customs) * 8500.0  # conservative material allowance
-        cons_cost = mat_cost * 0.04
-        labour = fab_h * 95.0 + inst_h * 120.0
-        margin = 0.22  # standard tier
-        price = (mat_cost + cons_cost + labour) * (1 + margin)
-        from datetime import timedelta
-        est_finish = (date.today() + timedelta(weeks=6)).isoformat()
         return {
             "code": code, "title": spec.title,
             "decision": "MANUAL_PLAN", "key_clause": "0.5",
-            "reasons": ["Custom build — engineer will verify these "
-                        "preliminary figures before production."],
-            "fab_hours": float(fab_h), "install_hours": float(inst_h),
-            "final_price_egp": round(price, 2),
-            "material_cost_egp": round(mat_cost, 2),
-            "schedule": {"start_week": "TBD", "planned_finish": est_finish},
-            "bom_with_stock": [],
-            "shortages": [],
-            "citations": ["Manual plan — preliminary engineering estimate"],
+            "needs_manual_planning": True,
+            "reasons": ["Custom build — planned manually by engineering "
+                        "and management."],
             "custom_items": customs,
         }
 
@@ -312,45 +292,21 @@ def decide_request(code: str, body: EstimatorDecision,
     release_status = None
 
     if custom and not structured.get("items"):
-        # manual plan path — create preliminary estimate with real numbers
-        project_code = _create_project_from_spec(session, spec)
-        proj_row = session.scalar(select(Project).where(Project.code == project_code))
-        if proj_row:
-            proj_row.release_status = "pending_manager_review"
-            n_items = max(len(structured.get("custom") or []), 1)
-            est_fab = 60.0 + n_items * 20.0
-            est_inst = round(est_fab * 0.25, 1)
-            est_mat = n_items * 8500.0
-            est_cons = round(est_mat * 0.04, 2)
-            est_labour = round(est_fab * 95 + est_inst * 120, 2)
-            est_price = round((est_mat + est_cons + est_labour) * 1.22, 2)
-            from datetime import date as _d, timedelta as _td
-            est_fin_date = (_d.today() + _td(weeks=6)).isoformat()
-            from datetime import timedelta as _td
-            est_fin = (date.today() + _td(weeks=6)).isoformat()
-            est_row = Estimate(
-                project_id=proj_row.id, version=1,
-                decision="MANUAL_PLAN",
-                material_cost_egp=est_mat, consumables_egp=est_cons,
-                fab_hours=est_fab, install_hours=est_inst,
-                labour_cost_egp=est_labour, margin_applied=0.22,
-                final_price_egp=est_price,
-                citations_json={"citations": [
-                    "Manual plan — preliminary engineering estimate"],
-                    "reasons": ["Custom build outside rate table"],
-                    "schedule": {"planned_finish": est_fin_date}},
-                created_by=user.id)
-            session.add(est_row)
-            session.flush()
-        if account_has_client(session, spec.account_id):
-            send_email(session, spec.account_id, "custom_manual_plan",
-                       {"code": spec.code, "title": spec.title})
-        release_status = "pending_manager_review"
+        # manual plan path — figures are entered by people, not the engine.
+        # The estimator fills his part in the Custom planner
+        # (POST /requests/{code}/custom/estimator-info), which creates the
+        # project + estimate. A plain approve here is not enough.
+        proj_row = session.scalar(select(Project).where(Project.code == code))
+        est_row = session.scalar(
+            select(Estimate).where(Estimate.project_id == proj_row.id)
+            .order_by(Estimate.version.desc())) if proj_row else None
+        if not proj_row or not est_row:
+            raise HTTPException(409,
+                "Custom request — open it in the Custom section and fill the "
+                "engineering plan (hours & scope) before approving")
         return {"code": code, "status": "approved",
-                "decision": "MANUAL_PLAN", "project": project_code,
-                "release_status": release_status,
-                "fab_hours": est_fab, "install_hours": est_inst,
-                "final_price_egp": est_price}
+                "decision": "MANUAL_PLAN", "project": proj_row.code,
+                "release_status": proj_row.release_status}
 
     parsed = parse_spec(spec.raw_text)
     parsed.account_id = _account_code(session, spec.account_id)
@@ -440,6 +396,7 @@ def awaiting_manager_decision(user: User = Depends(require_roles("manager")),
             select(Estimate).where(Estimate.project_id == p.id)
             .order_by(Estimate.version.desc()))
         acc = session.get(Account, p.account_id)
+        manual = ((est.citations_json or {}).get("manual") or {}) if est else {}
         out.append({
             "code": p.code,
             "title": p.title,
@@ -454,13 +411,85 @@ def awaiting_manager_decision(user: User = Depends(require_roles("manager")),
                              or []) if spec else [],
             "items": ((spec.structured_json or {}).get("items")
                       or []) if spec else [],
+            "estimator_plan": manual.get("estimator") or {},
+            "needs_pricing": bool(est and est.decision == "MANUAL_PLAN"
+                                  and not est.final_price_egp),
         })
     return out
+
+
+class CustomEstimatorInfo(BaseModel):
+    """Level 1 of the manual plan — filled by the ESTIMATOR only."""
+    scope: str = ""
+    materials_note: str = ""
+    fab_hours: float = Field(gt=0)
+    install_hours: float = Field(ge=0)
+
+
+@router.post("/requests/{code}/custom/estimator-info")
+def custom_estimator_info(code: str, body: CustomEstimatorInfo,
+                          user: User = Depends(
+                              require_roles("estimator", "manager")),
+                          session: Session = Depends(get_session)):
+    """Custom request, level 1 — the estimator enters engineering scope and
+    hours (only he can fill this), then sends it to the manager for level 2."""
+    spec = session.scalar(select(Spec).where(Spec.code == code))
+    if not spec or spec.status != "pending_review":
+        raise HTTPException(404 if not spec else 409,
+                            f"request {code} not pending"
+                            if spec else f"{code} not found")
+    structured = spec.structured_json or {}
+    if not (structured.get("custom") and not structured.get("items")):
+        raise HTTPException(409, f"{code} is not a custom-only request")
+
+    project_code = _create_project_from_spec(session, spec)
+    proj_row = session.scalar(select(Project).where(Project.code == project_code))
+    existing = session.scalar(
+        select(Estimate).where(Estimate.project_id == proj_row.id))
+    if existing:
+        raise HTTPException(409, f"{code} already has an engineering plan")
+
+    est_row = Estimate(
+        project_id=proj_row.id, version=1,
+        decision="MANUAL_PLAN",
+        material_cost_egp=0.0, consumables_egp=0.0,
+        fab_hours=body.fab_hours, install_hours=body.install_hours,
+        labour_cost_egp=round(body.fab_hours * 95 + body.install_hours * 120, 2),
+        margin_applied=0.0, final_price_egp=0.0,
+        citations_json={
+            "citations": ["Manual plan — estimator input"],
+            "reasons": [body.scope or "Custom build outside rate table"],
+            "schedule": {"planned_finish": "TBD"},
+            "manual": {
+                "estimator": {
+                    "scope": body.scope,
+                    "materials_note": body.materials_note,
+                    "fab_hours": body.fab_hours,
+                    "install_hours": body.install_hours,
+                    "by": user.email,
+                },
+                "manager": {},
+            }},
+        created_by=user.id)
+    session.add(est_row)
+    proj_row.release_status = "pending_manager_review"
+    spec.status = "approved"
+    spec.rejection_note = ""
+    spec.reviewed_by = user.id
+    session.flush()
+    return {"code": code, "project": project_code,
+            "release_status": "pending_manager_review",
+            "message": ("Engineering plan saved — waiting for the manager "
+                        "to complete pricing & schedule.")}
 
 
 class ManagerDecision(BaseModel):
     approved: bool
     comment: str = ""
+    # level 2 of the manual plan — filled by the MANAGER for custom requests
+    material_cost_egp: float | None = None
+    margin_applied: float | None = None
+    planned_finish: str | None = None
 
 
 @router.post("/requests/{code}/manager-decision")
@@ -496,9 +525,59 @@ def manager_request_decision(code: str, body: ManagerDecision,
     if not est:
         raise HTTPException(409, "no estimate on this request — "
                                  "have the estimator run it first")
-    approval = approvals_svc.queue_plan_release(session, est, project)
+
+    citations = dict(est.citations_json or {})
+    manual = dict(citations.get("manual") or {})
+
+    if est.decision == "MANUAL_PLAN":
+        # level 2 — the manager completes pricing & schedule before the
+        # plan goes to the client
+        if body.material_cost_egp is None or body.margin_applied is None:
+            raise HTTPException(422,
+                "Custom request — fill the missing plan fields (material "
+                "cost EGP, margin %, completion date) before approving")
+        margin = body.margin_applied
+        if margin > 1:
+            margin = margin / 100.0
+        labour = est.labour_cost_egp or (
+            est.fab_hours * 95 + est.install_hours * 120)
+        cons = round(body.material_cost_egp * 0.04, 2)
+        price = round((body.material_cost_egp + cons + labour)
+                      * (1 + margin), 2)
+        est.material_cost_egp = body.material_cost_egp
+        est.consumables_egp = cons
+        est.margin_applied = margin
+        est.final_price_egp = price
+        finish = (body.planned_finish or "").strip()
+        sched = dict(citations.get("schedule") or {})
+        if finish:
+            sched["planned_finish"] = finish
+            from datetime import date as _d
+            try:
+                project.estimated_finish = _d.fromisoformat(finish)
+            except ValueError:
+                pass
+        citations["schedule"] = sched
+        manual["manager"] = {
+            "material_cost_egp": body.material_cost_egp,
+            "margin_applied": margin,
+            "planned_finish": finish or "TBD",
+            "by": user.email,
+        }
+        citations["manual"] = manual
+        est.citations_json = citations
+
+    # the manager's approval here IS gate 1 — recorded immediately
+    project.release_status = "queued"
+    session.add(Approval(
+        approval_type="plan_release", entity_id=est.id,
+        approver_id=user.id, decision="approved",
+        note=f"Plan for {project.code} approved by manager"
+             + (f" | {comment}" if comment else "")))
+    session.flush()
+
     if account_has_client(session, project.account_id):
-        sched = (est.citations_json or {}).get("schedule") or {}
+        sched = citations.get("schedule") or {}
         send_email(session, project.account_id, "plan_ready",
                    {"code": project.code, "title": project.title,
                     "price": f"{est.final_price_egp:,.0f}" if est.final_price_egp else "—",
@@ -506,7 +585,7 @@ def manager_request_decision(code: str, body: ManagerDecision,
                     "install_hours": f"{est.install_hours:g}",
                     "finish_date": sched.get("planned_finish", "TBC")})
     return {"code": code, "status": "approved",
-            "release_status": "queued", "approval_id": approval.id}
+            "release_status": "queued"}
 
 
 @router.get("/requests/rejected")
@@ -640,16 +719,17 @@ def client_decision(code: str, body: DecisionIn,
 def release_project(code: str,
                     user: User = Depends(require_roles("manager")),
                     session: Session = Depends(get_session)):
-    """Final release after the approvals gate — records approver, emails client."""
+    """Final release — only for orders the CLIENT has accepted.
+    Assigns happen on the Release page right before releasing."""
     from finalproject.db.models import Approval, Estimate
     from finalproject.tracking.notify import send_email
 
     project = session.scalar(select(Project).where(Project.code == code))
     if not project:
         raise HTTPException(404, f"project {code} not found")
-    if project.release_status != "manager_approved":
-        raise HTTPException(409, "approve the plan at the release gate before "
-                                 f"releasing (status: {project.release_status})")
+    if project.release_status != "client_accepted":
+        raise HTTPException(409, "the client must accept the offer before "
+                                 f"release (status: {project.release_status})")
     if not project.assigned_engineer_id:
         raise HTTPException(409, "assign a project engineer before releasing")
 
