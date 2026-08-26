@@ -17,9 +17,8 @@ export default function Board() {
     setReady(true);
   }, []);
 
-  const isManager = user?.role === "manager";
-  // estimator & viewer are view-only; engineers act on assigned; manager on all
-  const canAct = user?.role === "manager" || user?.role === "engineer";
+  // only project engineers act on the board — manager is view-only here
+  const canAct = user?.role === "engineer";
 
   const load = useCallback(async () => {
     try {
@@ -35,15 +34,6 @@ export default function Board() {
     setBusy(code); setError("");
     try {
       await api(`/projects/${code}/stage`, { method: "PATCH", body: {} });
-      await load();
-    } catch (e) { setError(e.message); } finally { setBusy(""); }
-  }
-
-  async function remove(code) {
-    if (!confirm(`Delete ${code}? Only pre-approval drafts can be removed.`)) return;
-    setBusy(code); setError("");
-    try {
-      await api(`/projects/${code}`, { method: "DELETE" });
       await load();
     } catch (e) { setError(e.message); } finally { setBusy(""); }
   }
@@ -85,11 +75,8 @@ export default function Board() {
                   {(data.columns[stage] || []).map((p) => {
                     const canAdvanceThis =
                       canAct && p.stage !== "Closed" &&
-                      (isManager || p.assigned_engineer === user?.full_name ||
-                       !p.assigned_engineer && user?.role === "engineer");
-                    const deletable =
-                      isManager && p.stage !== "Closed" &&
-                      !["released", "manager_approved", "client_accepted"].includes(p.release_status);
+                      (p.assigned_engineer === user?.full_name ||
+                       !p.assigned_engineer);
                     return (
                       <div key={p.code} className="border border-border bg-secondary p-3">
                         <div className="flex items-start justify-between gap-2">
@@ -105,12 +92,6 @@ export default function Board() {
                           <button onClick={() => advance(p.code)} disabled={busy === p.code}
                                   className="mt-3 flex w-full items-center justify-center gap-1 border border-border py-1.5 font-mono text-[9px] text-muted-foreground hover:border-primary hover:text-primary disabled:opacity-50">
                             Advance <ArrowRight className="size-3" />
-                          </button>
-                        )}
-                        {deletable && (
-                          <button onClick={() => remove(p.code)} disabled={busy === p.code}
-                                  className="mt-1 flex w-full items-center justify-center border border-destructive/30 py-1.5 font-mono text-[9px] text-destructive hover:bg-destructive/10 disabled:opacity-50">
-                            Delete
                           </button>
                         )}
                       </div>

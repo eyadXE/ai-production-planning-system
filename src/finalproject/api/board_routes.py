@@ -189,11 +189,21 @@ def advance(code: str, body: StageIn,
 @router.get("/approvals")
 def list_approvals(user: User = Depends(require_roles("manager")),
                    session: Session = Depends(get_session)):
-    return [
-        {"id": a.id, "type": a.approval_type, "entity_id": a.entity_id,
-         "note": a.note}
-        for a in approvals_svc.pending(session)
-    ]
+    out = []
+    for a in approvals_svc.pending(session):
+        project_code = None
+        project_title = None
+        est = session.get(Estimate, a.entity_id)
+        project = (session.get(Project, est.project_id)
+                   if est else None)
+        if project:
+            project_code = project.code
+            project_title = project.title
+        out.append({"id": a.id, "type": a.approval_type,
+                    "entity_id": a.entity_id, "note": a.note,
+                    "project_code": project_code,
+                    "project_title": project_title})
+    return out
 
 
 @router.post("/approvals/{approval_id}/decision")
@@ -285,7 +295,8 @@ def my_assignments(user: User = Depends(get_current_user),
 @router.get("/timeline")
 def timeline(user: User = Depends(require_roles("estimator", "engineer", "manager", "viewer")),
              session: Session = Depends(get_session)):
-    """Manager map: every project laid over the coming capacity weeks."""
+    """Manager map: released projects laid over the coming capacity weeks.
+    A project only appears here after the full pipeline (gate + assignment)."""
     from finalproject.db.models import CapacityWeek
 
     weeks = session.scalars(
@@ -293,7 +304,8 @@ def timeline(user: User = Depends(require_roles("estimator", "engineer", "manage
     week_labels = [w.week_label for w in weeks]
     week_free = {w.week_label: w.total_hours - w.booked_hours for w in weeks}
 
-    projects = session.scalars(select(Project)).all()
+    projects = session.scalars(
+        select(Project).where(Project.release_status == "released")).all()
     rows = []
     for p in projects:
         schedule = None
@@ -343,7 +355,7 @@ def my_project_decision(code: str, body: ClientDecision,
         raise _HTTPException(404, f"project {code} not found")
     if user.role != "client" or user.account_id != project.account_id:
         raise _HTTPException(403, "only the owning client can decide")
-    if project.release_status != "manager_approved":
+    if project.release_status != "queued":
         raise _HTTPException(409, f"no plan awaiting your decision "
                                   f"(status: {project.release_status})")
     if body.accept:

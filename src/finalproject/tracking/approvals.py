@@ -1,7 +1,11 @@
 """Approval queue — the release gate (clause 0.2) with a real audit trail."""
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
 
 from finalproject.db.models import Account, Approval, Estimate, Project, User
 
@@ -62,36 +66,50 @@ def decide(session: Session, approval_id: int, approver: User,
 
     if approval.approval_type == "plan_release":
         estimate = session.get(Estimate, approval.entity_id)
-        if estimate:
-            project = session.get(Project, estimate.project_id)
-            if project:
-                # Manager approves -> CLIENT gets the final say
-                project.release_status = (
-                    "manager_approved" if approved else "rejected"
-                )
-                if approved and account_email(session, project.account_id):
-                    from finalproject.tracking.notify import send_email
+        if not estimate:
+            log.error("approval %s: estimate %s not found — rolling back",
+                      approval.id, approval.entity_id)
+            raise ApprovalError(
+                f"approval {approval.id} points to missing estimate "
+                f"{approval.entity_id} — cannot decide", 500)
+        project = session.get(Project, estimate.project_id)
+        if not project:
+            log.error("approval %s: project %s not found — rolling back",
+                      approval.id, estimate.project_id)
+            raise ApprovalError(
+                f"estimate {estimate.id} points to missing project "
+                f"{estimate.project_id} — cannot decide", 500)
+        if project.release_status != "client_accepted":
+            raise ApprovalError(
+                f"{project.code}: the client must accept the plan before "
+                f"this gate (status: {project.release_status})", 409)
+        # Client accepted -> manager opens the final gate
+        project.release_status = (
+            "manager_approved" if approved else "rejected"
+        )
+        if approved and account_email(session, project.account_id):
+            from finalproject.tracking.notify import send_email
 
-                    sched = ((estimate.citations_json or {}).get("schedule")
-                             or {})
-                    send_email(
-                        session, project.account_id, "plan_accepted",
-                        {
-                            "code": project.code,
-                            "title": project.title,
-                            "items": "see plan details in dashboard",
-                            "finish": sched.get("planned_finish", "TBC"),
-                            "site": "—", "required":
-                                str(project.required_date or "—"),
-                            "fab_hours": f"{estimate.fab_hours:g}",
-                            "install_hours": f"{estimate.install_hours:g}",
-                            "price": (f"{estimate.final_price_egp:,.0f}"
-                                      if estimate.final_price_egp else "—"),
-                            "start_week": sched.get("start_week", "—"),
-                            "finish_date": sched.get("planned_finish", "—"),
-                        },
-                        estimate=estimate, project=project,
-                    )
+            sched = ((estimate.citations_json or {}).get("schedule")
+                     or {})
+            send_email(
+                session, project.account_id, "plan_accepted",
+                {
+                    "code": project.code,
+                    "title": project.title,
+                    "items": "see plan details in dashboard",
+                    "finish": sched.get("planned_finish", "TBC"),
+                    "site": "—", "required":
+                        str(project.required_date or "—"),
+                    "fab_hours": f"{estimate.fab_hours:g}",
+                    "install_hours": f"{estimate.install_hours:g}",
+                    "price": (f"{estimate.final_price_egp:,.0f}"
+                              if estimate.final_price_egp else "—"),
+                    "start_week": sched.get("start_week", "—"),
+                    "finish_date": sched.get("planned_finish", "—"),
+                },
+                estimate=estimate, project=project,
+            )
     session.commit()
     session.refresh(approval)
     return approval

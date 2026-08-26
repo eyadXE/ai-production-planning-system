@@ -22,8 +22,8 @@ export default function Approvals() {
         api("/board"), api("/team/engineers")]);
       setEngineers(engs);
       const all = Object.values(board.columns).flat();
-      setAwaitingClient(all.filter((p) => p.release_status === "manager_approved"));
-      setReadyToRelease(all.filter((p) => p.release_status === "client_accepted"));
+      setAwaitingClient(all.filter((p) => p.release_status === "queued"));
+      setReadyToRelease(all.filter((p) => p.release_status === "manager_approved"));
     } catch (e) { setError(e.message); }
   }, []);
 
@@ -49,7 +49,7 @@ export default function Approvals() {
 
   return (
     <AppShell active="Approvals & Release" title="Approvals & Release"
-              subtitle="Gate 1: approve the estimator's plan. Gate 2: release after the client accepts.">
+              subtitle="Gate 1: approve the estimator's plan. Gate 2: after the client accepts, open the release gate and release to production.">
       {error && <div className="text-destructive">{error}</div>}
 
       <section>
@@ -57,7 +57,7 @@ export default function Approvals() {
           GATE 1 · Plans awaiting your approval · {items.length}</h3>
         {items.length === 0 ? (
           <div className="border border-border bg-card p-5 font-mono text-xs text-muted-foreground">
-            Nothing in the queue. Approved plans move to “Awaiting client”.
+            Nothing in the gate. Plans appear here once the client has accepted.
           </div>
         ) : items.map((a) => (
           <div key={a.id} className="mb-4 border border-border bg-card p-5">
@@ -80,13 +80,14 @@ export default function Approvals() {
                   const sel = document.getElementById("assign-" + a.id);
                   const eid = sel ? Number(sel.value) : null;
                   if (!eid) { setError("assign an engineer first"); return; }
+                  if (!a.project_code) { setError("approval has no linked project"); return; }
                   Promise.all([
-                    api(`/projects/${a.note.split(" ")[2]}/assign`, { method: "POST", body: { engineer_id: eid } }),
+                    api(`/projects/${a.project_code}/assign`, { method: "POST", body: { engineer_id: eid } }),
                     decide(a.id, true),
                   ]).catch((e) => setError(e.message));
                 }}
                 className="bg-primary px-4 py-2.5 font-mono text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50 self-end">
-                Approve &amp; assign → client
+                Approve &amp; assign engineer → ready to release
               </button>
               <button disabled={busy === String(a.id)} onClick={() => decide(a.id, false)}
                       className="border border-destructive/40 px-4 py-2.5 font-mono text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50 self-end">
@@ -98,8 +99,8 @@ export default function Approvals() {
       </section>
 
       <section className="mt-8">
-        <h3 className="mb-3 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-          Awaiting client decision · {awaitingClient.length}</h3>
+          <h3 className="mb-3 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            Awaiting client decision · {awaitingClient.length}</h3>
         {awaitingClient.length === 0 ? (
           <p className="font-mono text-[11px] text-muted-foreground">No plans waiting on clients.</p>
         ) : awaitingClient.map((p) => (
@@ -109,7 +110,8 @@ export default function Approvals() {
         ))}
         <p className="mt-2 font-mono text-[10px] leading-5 text-muted-foreground">
           The client sees the full plan (price, hours, schedule) and accepts or
-          declines from their dashboard.
+          declines from their dashboard. Only after they accept does the plan
+          enter your release gate above.
         </p>
       </section>
 

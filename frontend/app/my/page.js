@@ -34,7 +34,8 @@ export default function MyProjects() {
   if (!data) return <AppShell active="My Projects" title="My projects"><p className="font-mono text-xs text-muted-foreground">Loading…</p></AppShell>;
 
   const stageLabel = (p) =>
-    p.release_status === "queued" ? "Plan awaiting management approval"
+    p.release_status === "pending_manager_review" ? "In management review"
+    : p.release_status === "queued" ? "Plan awaiting your approval"
     : p.status === "blocked_material" ? "Waiting on materials"
     : `In ${p.stage}`;
 
@@ -70,14 +71,15 @@ export default function MyProjects() {
               <span className="font-mono text-xs font-bold text-foreground">{p.code}</span>
               {p.overdue && <span className="border border-destructive/40 px-1.5 py-0.5 font-mono text-[9px] text-destructive">DELAYED</span>}
               {p.release_status === "released" && <span className="border border-primary/40 px-1.5 py-0.5 font-mono text-[9px] text-primary">APPROVED</span>}
-              {p.release_status === "queued" && <span className="border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">IN REVIEW</span>}
+              {p.release_status === "pending_manager_review" && <span className="border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">IN REVIEW</span>}
+              {p.release_status === "queued" && <span className="border border-chart-2/40 px-1.5 py-0.5 font-mono text-[9px] text-chart-2">PLAN READY</span>}
             </div>
             <p className="mt-2 font-mono text-xs text-foreground">{p.title}</p>
             <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{stageLabel(p)}</p>
             <p className="mt-1 font-mono text-[10px] text-muted-foreground">
               {p.estimated_finish ? `Estimated finish: ${p.estimated_finish}` : "Estimated finish: pending planning"}
             </p>
-            {p.release_status === "manager_approved" && (
+            {p.release_status === "queued" && (
               <div className="mt-3 flex gap-2">
                 <button onClick={() => decide(p.code, true)} disabled={busy === p.code}
                         className="bg-primary px-3 py-2 font-mono text-[10px] font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50">

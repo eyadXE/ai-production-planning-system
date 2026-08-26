@@ -138,14 +138,51 @@ def chat_message(session_id: int, body: MessageIn,
                  user: User = Depends(get_current_user),
                  session: Session = Depends(get_session)):
     """Chat with assistant. When complete, returns collected custom_line
-    for the frontend to add to localStorage cart — does NOT submit."""
+    for the frontend to add to localStorage cart — does NOT submit.
+
+    Never raises 500 for provider/internal failures: falls back to the
+    deterministic guided interview and always returns valid JSON."""
     cs = session.get(ChatSession, session_id)
     if not cs or cs.user_id != user.id:
         raise HTTPException(404, "chat session not found")
     if cs.status != "active":
         raise HTTPException(409, "request already submitted")
-    session.add(ChatMessage(session_id=cs.id, role="client",
-                            content=body.text))
+    try:
+        return _chat_turn(session, cs, user, body.text)
+    except Exception as exc:  # noqa: BLE001 — chat must never 500
+        logger.warning("chat turn failed (%s): %s", type(exc).__name__, exc)
+        session.rollback()
+        cs = session.get(ChatSession, session_id)
+        if not cs or cs.status != "active":
+            raise HTTPException(409, "chat session is no longer active")
+        try:
+            stored = dict(cs.collected_json or {})
+            stored["guided"] = True
+            cs.collected_json = stored
+            session.commit()
+            fields = _merge_fields(stored, stored.get("pending_data"))
+            result = guided_turn(session, cs, user, stored, fields, body.text)
+            result["guided"] = True
+            result.setdefault("reply",
+                              "Sorry, something glitched on our side — "
+                              "let's continue here. What would you like "
+                              "us to build?")
+            return result
+        except Exception:  # noqa: BLE001 — absolute last resort
+            logger.exception("guided fallback also failed")
+            session.rollback()
+            reply = ("I'm having trouble right now — please try again in "
+                     "a moment, or use the guided request form.")
+            session.add(ChatMessage(session_id=session_id,
+                                    role="assistant", content=reply))
+            session.commit()
+            return {"llm": False, "guided": True, "complete": False,
+                    "reply": reply}
+
+
+def _chat_turn(session: Session, cs: ChatSession, user: User,
+               text: str) -> dict:
+    session.add(ChatMessage(session_id=cs.id, role="client", content=text))
 
     stored = dict(cs.collected_json or {})
     fields = _merge_fields(stored, stored.get("pending_data"))
@@ -153,7 +190,7 @@ def chat_message(session_id: int, body: MessageIn,
     # try LLM
     if configured_chain():
         prompt = (_history(session, cs) +
-                  f"\nCLIENT: {body.text}" +
+                  f"\nCLIENT: {text}" +
                   "\n\nSERVER CONTEXT:\n" +
                   _context(fields, stored.get("photo")))
         resp = LLMClient().complete(prompt, SYSTEM_PROMPT)
@@ -175,8 +212,8 @@ def chat_message(session_id: int, body: MessageIn,
                                 "description":
                                     new_fields.get("description", ""),
                                 "photo": stored.get("photo", ""),
-                                "quantity": float(new_fields.get(
-                                    "quantity", 1)),
+                                "quantity": _safe_quantity(
+                                    new_fields.get("quantity", 1)),
                                 "material_finish": new_fields.get(
                                     "material_finish", ""),
                             },
@@ -193,9 +230,17 @@ def chat_message(session_id: int, body: MessageIn,
     stored["guided"] = True
     cs.collected_json = stored
     session.commit()
-    result = guided_turn(session, cs, user, stored, fields, body.text)
+    result = guided_turn(session, cs, user, stored, fields, text)
     result["guided"] = True
     return result
+
+
+def _safe_quantity(value) -> float:
+    try:
+        q = float(value)
+        return q if q > 0 else 1.0
+    except (TypeError, ValueError):
+        return 1.0
 
 
 @router.get("/sessions/mine")

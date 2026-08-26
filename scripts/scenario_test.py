@@ -55,57 +55,81 @@ check("2b resource check included", isinstance(j.get("bom_with_stock"), list))
 # Step 3: Estimator approves & sends to manager
 s, r = req(f"/requests/{code}/decision", "POST", EST,
            {"approved": True, "comment": ""})
-check("3 estimator approves -> project created", s == 200 and r.get("project") == code)
+check("3 estimator approves -> project created",
+      s == 200 and r.get("project") == code
+      and r.get("release_status") == "pending_manager_review")
 
-# Step 4: Plan was auto-queued by the estimator's approval.
-# Verify it's in the manager's queue.
-s, pend = req("/approvals", "GET", MGR)
-target = next((a for a in pend if f"for {code} " in a.get("note", "")), None)
-aid = target["id"] if target else 0
-check("4 plan queued for manager", aid > 0,
-      str(pend)[:120])
+# Step 4: Manager sees it in Requests and approves it there
+s, awt = req("/requests/awaiting-decision", "GET", MGR)
+check("4 request awaiting manager decision in requests",
+      s == 200 and any(a["code"] == code for a in awt), str(awt)[:120])
 
-# Verify board shows queued
+# estimator may NOT decide — manager only
+s, _ = req(f"/requests/{code}/manager-decision", "POST", EST,
+           {"approved": True})
+check("4a estimator cannot decide request", s == 403)
+
+s, r = req(f"/requests/{code}/manager-decision", "POST", MGR,
+           {"approved": True})
+aid = r.get("approval_id", 0)
+check("4b manager approves request -> plan queued for client",
+      s == 200 and r.get("release_status") == "queued" and aid > 0,
+      str(r)[:120])
+
+# Verify board shows queued (waiting on the client)
 _, board = req("/board", "GET", MGR)
 queued_items = [p for col in board["columns"].values() for p in col
                 if p["code"] == code]
-check("4b board shows IN GATE badge",
+check("4c board shows queued (awaiting client)",
       queued_items and queued_items[0]["release_status"] == "queued")
 
-# Step 5: Manager approves
+# The release gate stays shut until the client accepts
+s, _ = req(f"/approvals/{aid}/decision", "POST", MGR, {"approved": True})
+check("4d gate blocked before client acceptance", s == 409)
+
+# Step 5: Client accepts from dashboard
+s, j = req(f"/my/projects/{code}/decision", "POST", CLI, {"accept": True})
+check("5 client accepts plan",
+      s == 200 and j.get("release_status") == "client_accepted")
+
+# Step 6: Manager opens the release gate
 s, j = req(f"/approvals/{aid}/decision", "POST", MGR,
            {"approved": True, "note": "verified"})
-check("5 manager approves plan", s == 200 and j["decision"] == "approved")
+check("6 manager approves at the gate",
+      s == 200 and j["decision"] == "approved")
 
 # Verify status is manager_approved
 _, board = req("/board", "GET", MGR)
 items = [p for col in board["columns"].values() for p in col if p["code"] == code]
-check("5b release_status is manager_approved",
+check("6b release_status is manager_approved",
       items and items[0]["release_status"] == "manager_approved",
       str(items[0]["release_status"] if items else "?"))
 
-# Step 6: Assign engineer BEFORE release
+# not in the timeline yet — only released projects appear
+_, tl = req("/timeline", "GET", MGR)
+check("6c timeline hides unreleased project",
+      all(p["code"] != code for p in tl["projects"]))
+
+# Step 7: Assign engineer BEFORE release
 _, eng_list = req("/team/engineers", "GET", MGR)
 assigned_eng_email = eng_list[0]["email"]
 s, _ = req(f"/projects/{code}/assign", "POST", MGR,
            {"engineer_id": eng_list[0]["id"]})
-check("6 manager assigns engineer", s == 200)
+check("7 manager assigns engineer", s == 200)
 
-# Step 7: Client accepts from dashboard
-s, j = req(f"/my/projects/{code}/decision", "POST", CLI, {"accept": True})
-check("7 client accepts plan", s == 200 and j.get("release_status") == "client_accepted")
-
-# Step 8: Manager releases
+# Step 8: Manager releases -> NOW it appears in the timeline
 s, j = req(f"/projects/{code}/release", "POST", MGR)
-check("8 manager releases after acceptance",
+check("8 manager releases after gate",
       s == 200 and j.get("release_status") == "released")
+_, tl = req("/timeline", "GET", MGR)
+check("8b released project appears in timeline",
+      any(p["code"] == code for p in tl["projects"]))
 
 # Step 9: Cannot delete released order
 s, _ = req(f"/projects/{code}", "DELETE", MGR)
 check("9 released order cannot be deleted", s == 403)
 
-# Step 10: Assigned engineer walks stages
-ENG = MGR  # manager can always advance
+# Step 10: Assigned engineer walks stagesENG = MGR  # manager can always advance
 for expected in STAGES[1:]:
     s, j = req(f"/projects/{code}/stage", "PATCH", ENG, {})
     check(f"10 advance -> {j.get('stage', expected)}",

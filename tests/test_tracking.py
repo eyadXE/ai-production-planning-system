@@ -112,7 +112,7 @@ def test_stage_requires_staff(client_user):
     assert r.status_code == 403
 
 
-# ---------- estimate -> gate -> release --------------------------------------
+# ---------- estimate -> manager decision -> gate -> release ------------------
 
 
 def _estimate(code, estimator):
@@ -127,49 +127,156 @@ def test_estimate_creates_draft_then_estimator_submits(estimator):
     assert body["fab_hours"] == 48.0
     r = client.post("/requests/J-001/submit-to-manager", headers=estimator)
     assert r.status_code == 200, r.text
+    assert r.json()["release_status"] == "pending_manager_review"
+    # nothing enters the release gate until the MANAGER approves the request
+    awaiting = client.get("/requests/awaiting-decision",
+                          headers=login("manager@oususapp.com")).json()
+    assert any(a["code"] == "J-001" for a in awaiting)
+
+
+def _new_request(client_user, title):
+    r = client.post("/requests", headers=client_user, json={
+        "title": title, "items": [{"kind": "railing", "qty": 10}],
+        "custom": [], "finish": "", "site": "test site",
+        "required_raw": "within 8 weeks"})
+    assert r.status_code == 200, r.text
+    return r.json()["code"]
+
+
+def _walk_to_gate(code, estimator, manager, client_user):
+    """run-estimate -> estimator approves -> manager approves -> client accepts."""
+    r = client.post(f"/requests/{code}/run-estimate", headers=estimator)
+    assert r.status_code == 200, r.text
+    r = client.post(f"/requests/{code}/decision",
+                    json={"approved": True}, headers=estimator)
+    assert r.status_code == 200, r.text
+    assert r.json().get("release_status") == "pending_manager_review"
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": True}, headers=manager)
+    assert r.status_code == 200, r.text
+    approval_id = r.json()["approval_id"]
+    r = client.post(f"/my/projects/{code}/decision",
+                    json={"accept": True}, headers=client_user)
+    assert r.status_code == 200, r.text
+    return approval_id
+
+
+def test_full_new_flow_manager_decides_before_client(estimator, manager,
+                                                     client_user):
+    """Estimator approves -> manager approves/rejects in Requests ->
+    client accepts -> THEN the plan sits in the release gate."""
+    code = _new_request(client_user, "flow order test")
+    r = client.post(f"/requests/{code}/run-estimate", headers=estimator)
+    assert r.status_code == 200, r.text
+
+    # estimator approves -> project created awaiting the MANAGER
+    r = client.post(f"/requests/{code}/decision",
+                    json={"approved": True}, headers=estimator)
+    assert r.status_code == 200, r.text
+    assert r.json().get("release_status") == "pending_manager_review"
+
+    board = client.get("/board", headers=manager).json()["columns"]
+    row = [p for col in board.values() for p in col if p["code"] == code]
+    assert row and row[0]["release_status"] == "pending_manager_review"
+
+    # estimator may NOT decide — manager only
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": True}, headers=estimator)
+    assert r.status_code == 403, "only a manager may decide requests"
+
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": True}, headers=manager)
+    assert r.status_code == 200, r.text
     assert r.json()["release_status"] == "queued"
-    assert r.json()["approval_id"] > 0
+
+    board = client.get("/board", headers=manager).json()["columns"]
+    row = [p for col in board.values() for p in col if p["code"] == code]
+    assert row and row[0]["release_status"] == "queued"
 
 
-def test_manager_must_open_the_gate(manager, engineer, estimator):
-    body = _estimate("J-004", estimator)
-    client.post("/requests/J-004/submit-to-manager", headers=estimator)
-    pending_all = client.get("/approvals", headers=manager).json()
-    approval_id = next(a["id"] for a in pending_all
-                       if f"for {body['project']} " in a["note"])
+def test_manager_must_open_the_gate(manager, engineer, estimator, client_user):
+    code = _new_request(client_user, "gate test")
+    aid = _walk_to_gate(code, estimator, manager, client_user)
 
-    # engineer cannot decide — the gate is manager-only (0.2)
-    r = client.post(f"/approvals/{approval_id}/decision",
+    # gate cannot open before the client accepted — already satisfied here;
+    # engineer can never open it though
+    r = client.post(f"/approvals/{aid}/decision",
                     json={"approved": True}, headers=engineer)
     assert r.status_code == 403
 
-    r = client.post(f"/approvals/{approval_id}/decision",
+    r = client.post(f"/approvals/{aid}/decision",
                     json={"approved": True, "note": "materials verified"},
                     headers=manager)
     assert r.status_code == 200
     board = client.get("/board", headers=manager).json()["columns"]
-    row = [p for col in board.values() for p in col if p["code"] == "J-004"]
+    row = [p for col in board.values() for p in col if p["code"] == code]
     assert row and row[0]["release_status"] == "manager_approved"
 
 
-def test_double_decision_rejected(manager):
-    pending = client.get("/approvals", headers=manager).json()
-    if pending:
-        aid = pending[0]["id"]
-        client.post(f"/approvals/{aid}/decision",
-                    json={"approved": False}, headers=manager)
-        r = client.post(f"/approvals/{aid}/decision",
-                        json={"approved": True}, headers=manager)
-        assert r.status_code == 409
-
-
-def test_audit_trail_names_the_approver(manager, estimator):
-    client.post("/requests/J-003/submit-to-manager", headers=estimator)
-    pending = client.get("/approvals", headers=manager).json()
-    if pending:
-        aid = pending[0]["id"]
-        client.post(f"/approvals/{aid}/decision",
+def test_gate_blocked_until_client_accepts(manager, estimator, client_user):
+    code = _new_request(client_user, "gate order test")
+    r = client.post(f"/requests/{code}/run-estimate", headers=estimator)
+    assert r.status_code == 200
+    r = client.post(f"/requests/{code}/decision",
+                    json={"approved": True}, headers=estimator)
+    assert r.status_code == 200
+    r = client.post(f"/requests/{code}/manager-decision",
                     json={"approved": True}, headers=manager)
+    aid = r.json()["approval_id"]
+
+    # the gate stays shut until the CLIENT accepts the plan
+    r = client.post(f"/approvals/{aid}/decision",
+                    json={"approved": True}, headers=manager)
+    assert r.status_code == 409
+    assert "client" in r.json()["detail"].lower()
+
+    r = client.post(f"/my/projects/{code}/decision",
+                    json={"accept": True}, headers=client_user)
+    assert r.status_code == 200 and \
+        r.json()["release_status"] == "client_accepted"
+
+    r = client.post(f"/approvals/{aid}/decision",
+                    json={"approved": True}, headers=manager)
+    assert r.status_code == 200
+
+
+def test_manager_can_reject_a_request(estimator, manager, client_user):
+    code = _new_request(client_user, "manager reject test")
+    client.post(f"/requests/{code}/run-estimate", headers=estimator)
+    r = client.post(f"/requests/{code}/decision",
+                    json={"approved": True}, headers=estimator)
+    assert r.status_code == 200
+
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": False, "comment": ""},
+                    headers=manager)
+    assert r.status_code == 422, "rejection requires a comment"
+
+    r = client.post(f"/requests/{code}/manager-decision",
+                    json={"approved": False, "comment": "over budget"},
+                    headers=manager)
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
+
+    rr = client.get("/requests/rejected", headers=manager).json()
+    row = next((x for x in rr if x["code"] == code), None)
+    assert row is not None and "[manager]" in row["note"]
+
+
+def test_double_decision_rejected(manager, estimator, client_user):
+    code = _new_request(client_user, "double decide test")
+    aid = _walk_to_gate(code, estimator, manager, client_user)
+    client.post(f"/approvals/{aid}/decision",
+                json={"approved": False}, headers=manager)
+    r = client.post(f"/approvals/{aid}/decision",
+                    json={"approved": True}, headers=manager)
+    assert r.status_code == 409
+
+
+def test_audit_trail_names_the_approver(manager, estimator, client_user):
+    code = _new_request(client_user, "audit trail test")
+    aid = _walk_to_gate(code, estimator, manager, client_user)
+    client.post(f"/approvals/{aid}/decision",
+                json={"approved": True}, headers=manager)
     audit = client.get("/audit", headers=manager).json()
     assert audit, "decisions recorded"
     decided = [a for a in audit if a["decision"] != "pending"]
