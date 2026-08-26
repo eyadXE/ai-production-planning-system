@@ -106,7 +106,7 @@ check("9 released order cannot be deleted", s == 403)
 
 # Step 10: Assigned engineer walks stages
 ENG = MGR  # manager can always advance
-for expected in STAGES[STAGES.index("Production Planning") + 1:]:
+for expected in STAGES[1:]:
     s, j = req(f"/projects/{code}/stage", "PATCH", ENG, {})
     check(f"10 advance -> {j.get('stage', expected)}",
           s == 200 and j.get("stage") == expected)

@@ -61,6 +61,29 @@ def _history(db: Session, cs) -> str:
     return "\n".join(f"{m.role.upper()}: {m.content}" for m in msgs[-8:])
 
 
+
+def _merge_fields(stored: dict, data: dict | None) -> dict:
+    fields = dict((stored or {}).get("fields") or {})
+    for k, v in (data or {}).items():
+        if v not in (None, ""):
+            fields[k] = str(v).strip()
+    return fields
+
+
+def _context(fields: dict, photo: str | None) -> str:
+    known = dict(fields)
+    if known.get("description") and not known.get("name"):
+        words = str(known["description"]).split()
+        known["name"] = " ".join(words[:5]).strip(" ,.-").title()
+    missing = [k for k in ("description", "quantity", "material_finish")
+               if k not in known]
+    lines = [f"KNOWN: {json.dumps(known, ensure_ascii=False)}",
+             f"MISSING: {missing or 'nothing'}"]
+    if photo:
+        lines.append("A reference photo was attached.")
+    return "\n".join(lines)
+
+
 @router.post("/start")
 def start_chat(user: User = Depends(get_current_user),
                session: Session = Depends(get_session)):

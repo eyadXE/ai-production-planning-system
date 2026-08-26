@@ -10,10 +10,15 @@ export default function Board() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [user, setUser] = useState(null);
-  useEffect(() => setUser(getUser()), []);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setUser(getUser());
+    setReady(true);
+  }, []);
 
   const isManager = user?.role === "manager";
-  // estimator & viewer are view-only; engineers act on assigned projects
+  // estimator & viewer are view-only; engineers act on assigned; manager on all
   const canAct = user?.role === "manager" || user?.role === "engineer";
 
   const load = useCallback(async () => {
@@ -35,13 +40,15 @@ export default function Board() {
   }
 
   async function remove(code) {
-    if (!confirm(`Delete project ${code}? This cannot be undone.`)) return;
+    if (!confirm(`Delete ${code}? Only pre-approval drafts can be removed.`)) return;
     setBusy(code); setError("");
     try {
       await api(`/projects/${code}`, { method: "DELETE" });
       await load();
     } catch (e) { setError(e.message); } finally { setBusy(""); }
   }
+
+  if (!ready || !user) return null;
 
   function badgeFor(p) {
     if (p.overdue)
@@ -52,12 +59,14 @@ export default function Board() {
       return <span className="border border-primary/40 px-1.5 py-0.5 font-mono text-[9px] text-primary">RELEASED</span>;
     if (p.release_status === "queued")
       return <span className="border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">IN GATE</span>;
+    if (p.release_status === "manager_approved")
+      return <span className="border border-chart-2/40 px-1.5 py-0.5 font-mono text-[9px] text-chart-2">CLIENT REVIEW</span>;
     return null;
   }
 
   return (
     <AppShell active="Projects" title="Projects"
-              subtitle="Live pipeline across the ten production stages.">
+              subtitle={canAct ? "Live pipeline — advance stages as work completes." : "View-only board."}>
       {error && <div className="text-destructive">{error}</div>}
       {!data ? (
         <p className="font-mono text-xs text-muted-foreground">Loading…</p>
@@ -73,31 +82,40 @@ export default function Board() {
                   </span>
                 </div>
                 <div className="flex min-h-[430px] flex-col gap-2 p-2">
-                  {(data.columns[stage] || []).map((p) => (
-                    <div key={p.code} className="border border-border bg-secondary p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        {badgeFor(p)}
-                        <ArrowRight className="size-3 rotate-45 text-muted-foreground opacity-0" />
+                  {(data.columns[stage] || []).map((p) => {
+                    const canAdvanceThis =
+                      canAct && p.stage !== "Closed" &&
+                      (isManager || p.assigned_engineer === user?.full_name ||
+                       !p.assigned_engineer && user?.role === "engineer");
+                    const deletable =
+                      isManager && p.stage !== "Closed" &&
+                      !["released", "manager_approved", "client_accepted"].includes(p.release_status);
+                    return (
+                      <div key={p.code} className="border border-border bg-secondary p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          {badgeFor(p)}
+                        </div>
+                        <p className="mt-3 font-mono text-[11px] font-bold leading-relaxed text-foreground">{p.code}</p>
+                        <p className="mt-1 font-mono text-[9px] text-muted-foreground">{p.title}</p>
+                        <div className="mt-2 font-mono text-[9px] text-muted-foreground">
+                          req: {p.required_date || "—"}
+                          {p.assigned_engineer && <div>eng: {p.assigned_engineer}</div>}
+                        </div>
+                        {canAdvanceThis && p.stage !== "Closed" && (
+                          <button onClick={() => advance(p.code)} disabled={busy === p.code}
+                                  className="mt-3 flex w-full items-center justify-center gap-1 border border-border py-1.5 font-mono text-[9px] text-muted-foreground hover:border-primary hover:text-primary disabled:opacity-50">
+                            Advance <ArrowRight className="size-3" />
+                          </button>
+                        )}
+                        {deletable && (
+                          <button onClick={() => remove(p.code)} disabled={busy === p.code}
+                                  className="mt-1 flex w-full items-center justify-center border border-destructive/30 py-1.5 font-mono text-[9px] text-destructive hover:bg-destructive/10 disabled:opacity-50">
+                            Delete
+                          </button>
+                        )}
                       </div>
-                      <p className="mt-3 font-mono text-[11px] font-bold leading-relaxed text-foreground">{p.code}</p>
-                      <p className="mt-1 font-mono text-[9px] text-muted-foreground">{p.title}</p>
-                      <div className="mt-2 font-mono text-[9px] text-muted-foreground">
-                        req: {p.required_date || "—"}
-                      </div>
-                      {canAct && p.stage !== "Closed" && (
-                        <button onClick={() => advance(p.code)} disabled={busy === p.code}
-                                className="mt-3 flex w-full items-center justify-center gap-1 border border-border py-1.5 font-mono text-[9px] text-muted-foreground hover:border-primary hover:text-primary disabled:opacity-50">
-                          Advance <ArrowRight className="size-3" />
-                        </button>
-                      )}
-                      {isManager && p.release_status === "draft" && (
-                        <button onClick={() => remove(p.code)} disabled={busy === p.code}
-                                className="mt-1 flex w-full items-center justify-center border border-destructive/30 py-1.5 font-mono text-[9px] text-destructive hover:bg-destructive/10 disabled:opacity-50">
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
