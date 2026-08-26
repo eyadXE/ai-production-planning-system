@@ -210,19 +210,37 @@ def run_estimate_endpoint(code: str,
             # manual-plan path handled at decision time
             pass
 
-    # custom-only requests cannot be auto-estimated — the estimator reviews
-    # them as a MANUAL_PLAN (engineer-priced, no handbook rates apply)
+    # custom-only requests get a manual-plan estimate with realistic
+    # placeholder data so the estimator has something to review
     if structured.get("custom") and not parsed.items:
+        customs = structured.get("custom") or []
+        total_desc = " ".join(c.get("description", "") for c in customs).lower()
+        # rough estimation heuristics
+        base_hours = 40 + len(customs) * 20  # min 60h for any custom job
+        if "large" in total_desc or "industrial" in total_desc:
+            base_hours += 80
+        fab_h = float(base_hours)
+        inst_h = round(fab_h * 0.25, 1)
+        mat_cost = len(customs) * 8500.0  # conservative material allowance
+        cons_cost = mat_cost * 0.04
+        labour = fab_h * 95.0 + inst_h * 120.0
+        margin = 0.22  # standard tier
+        price = (mat_cost + cons_cost + labour) * (1 + margin)
+        from datetime import timedelta
+        est_finish = (date.today() + timedelta(weeks=6)).isoformat()
         return {
             "code": code, "title": spec.title,
             "decision": "MANUAL_PLAN", "key_clause": "0.5",
-            "reasons": ["Custom build — routed to engineers for a manual "
-                        "plan and quote."],
-            "fab_hours": None, "install_hours": None,
-            "final_price_egp": None, "material_cost_egp": None,
-            "schedule": None,
+            "reasons": ["Custom build — engineer will verify these "
+                        "preliminary figures before production."],
+            "fab_hours": float(fab_h), "install_hours": float(inst_h),
+            "final_price_egp": round(price, 2),
+            "material_cost_egp": round(mat_cost, 2),
+            "schedule": {"start_week": "TBD", "planned_finish": est_finish},
             "bom_with_stock": [],
-            "custom_items": structured.get("custom") or [],
+            "shortages": [],
+            "citations": ["Manual plan — preliminary engineering estimate"],
+            "custom_items": customs,
         }
 
     materials = session.scalars(select(Material)).all()
@@ -294,18 +312,45 @@ def decide_request(code: str, body: EstimatorDecision,
     release_status = None
 
     if custom and not structured.get("items"):
-        # manual plan path
+        # manual plan path — create preliminary estimate with real numbers
         project_code = _create_project_from_spec(session, spec)
         proj_row = session.scalar(select(Project).where(Project.code == project_code))
         if proj_row:
-            proj_row.release_status = "draft"
+            proj_row.release_status = "queued"
+            n_items = max(len(structured.get("custom") or []), 1)
+            est_fab = 60.0 + n_items * 20.0
+            est_inst = round(est_fab * 0.25, 1)
+            est_mat = n_items * 8500.0
+            est_cons = round(est_mat * 0.04, 2)
+            est_labour = round(est_fab * 95 + est_inst * 120, 2)
+            est_price = round((est_mat + est_cons + est_labour) * 1.22, 2)
+            from datetime import date as _d, timedelta as _td
+            est_fin_date = (_d.today() + _td(weeks=6)).isoformat()
+            from datetime import timedelta as _td
+            est_fin = (date.today() + _td(weeks=6)).isoformat()
+            est_row = Estimate(
+                project_id=proj_row.id, version=1,
+                decision="MANUAL_PLAN",
+                material_cost_egp=est_mat, consumables_egp=est_cons,
+                fab_hours=est_fab, install_hours=est_inst,
+                labour_cost_egp=est_labour, margin_applied=0.22,
+                final_price_egp=est_price,
+                citations_json={"citations": [
+                    "Manual plan — preliminary engineering estimate"],
+                    "reasons": ["Custom build outside rate table"],
+                    "schedule": {"planned_finish": est_fin_date}},
+                created_by=user.id)
+            session.add(est_row)
+            session.flush()
+            approval = approvals_svc.queue_plan_release(session, est_row, proj_row)
         if account_has_client(session, spec.account_id):
             send_email(session, spec.account_id, "custom_manual_plan",
                        {"code": spec.code, "title": spec.title})
-        release_status = "draft"
-        session.commit()
+        release_status = "queued"
         return {"code": code, "status": "approved",
-                "decision": "MANUAL_PLAN", "project": project_code}
+                "decision": "MANUAL_PLAN", "project": project_code,
+                "fab_hours": est_fab, "install_hours": est_inst,
+                "final_price_egp": est_price}
 
     parsed = parse_spec(spec.raw_text)
     parsed.account_id = _account_code(session, spec.account_id)

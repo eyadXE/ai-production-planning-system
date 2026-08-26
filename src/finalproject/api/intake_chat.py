@@ -1,10 +1,7 @@
 """Conversational custom-work intake — LLM conducts the interview.
 
-The server owns the collected-state: after every turn it merges whatever the
-model extracted into `collected_json.fields`, and the next prompt states
-explicitly what is KNOWN vs MISSING so the model can never re-ask.
-Minimum schema to submit: name, description (with size), quantity,
-material_finish. Site / deadline asked once but optional.
+Server owns collected-state. When every provider fails, the deterministic
+guided interview takes over automatically — the chat can never dead-end.
 """
 
 import json
@@ -18,92 +15,82 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finalproject.auth.dependencies import get_current_user
-from finalproject.db.database import get_session
 from finalproject.api.intake_guided import guided_turn
-from finalproject.auth.service import VALID_ROLES  # noqa
 from finalproject.api.intake_routes import next_spec_code
+from finalproject.db.database import get_session
 from finalproject.db.models import ChatMessage, ChatSession, Spec, User
 from finalproject.llm.base import configured_chain
 from finalproject.llm.client import LLMClient, extract_json
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/intake", tags=["intake"])
 
-FIELD_ORDER = [
-    ("description", "what it is + key dimensions/size"),
-    ("quantity", "how many units"),
-    ("material_finish", "material and finish"),
-    ("quantity", "how many units"),
-    ("material_finish", "material and finish (suggest a default if unsure)"),
-    ("site", "delivery/installation location"),
-    ("required_raw", "deadline phrase (optional — we estimate completion ourselves)"),
-]
-REQUIRED = {"description", "quantity", "material_finish"}
+VALID_KINDS = {"railing", "mezzanine", "flight", "gate_double", "gate_single",
+               "security_door", "caged_ladder", "support_frame",
+               "racking_bay", "canopy", "floor_plate_area"}
 
-SYSTEM_PROMPT = """You are the friendly custom-work assistant for Ousus, a \
-steel fabrication company. The client wants something CUSTOM built. Your job \
-is to collect the missing fields listed in the CONTEXT the server gives you \
-each turn.
+REQUIRED_FIELDS = ("description", "quantity", "material_finish")
+OPTIONAL_FIELDS = ("site", "required_raw")
+ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
-HARD RULES
-- NEVER ask about a field already present under KNOWN. Not to confirm it, \
-not to rephrase it. Once is enough.
-- Ask about exactly ONE missing field per message (follow the MISSING order).
-- If the client's answer contains several answers, accept them all silently.
-- If an answer is vague, ask one concrete clarifying question about it.
-- Never invent values. Never compute prices or dates. We estimate completion \
-ourselves — if the client has no deadline, say that's fine.
-- When nothing is MISSING, summarise all fields briefly and ask the client \
-to confirm. Only set complete=true AFTER they confirm.
+SYSTEM_PROMPT = """You are Ousus's friendly intake assistant. Collect these \
+fields from the client one at a time:
+- description: what to build + key dimensions/size
+- quantity: how many units
+- material_finish: material + finish (suggest default if unsure)
+- site: delivery/installation location
+- required_raw: deadline phrase (optional)
 
-OUTPUT — raw JSON only. IMPORTANT: "data" must contain ALL fields known so far on EVERY turn (not just new ones):
-{"reply": "...", "complete": false, "data": {"name":"..."}} or
-{"reply":"...","complete":false,"data":{"name":"...","description":"...","quantity":2}}
-or on confirmed submission:
-{"reply": "...", "complete": true, "data": {"name":"...","description":"...",
-"quantity":1,"material_finish":"...","site":"...","required_raw":"..."}}"""
+RULES:
+- Ask ONE missing field per message.
+- If answer contains multiple fields, accept them ALL silently.
+- Never invent values. Never compute prices/dates.
+- When nothing is MISSING, summarise and ask to confirm.
+- Only set complete=true AFTER client confirms.
+
+OUTPUT raw JSON only:
+{"reply":"...","complete":false,"data":{...known fields...}}
+{"reply":"...","complete":true,"data":{"description":"...","quantity":1,\
+"material_finish":"...","site":"...","required_raw":"..."}}"""
 
 
 class MessageIn(BaseModel):
     text: str
 
 
-def _history(session_db: Session, cs: ChatSession) -> str:
-    msgs = session_db.scalars(
+def _history(db: Session, cs) -> str:
+    msgs = db.scalars(
         select(ChatMessage).where(ChatMessage.session_id == cs.id)
-        .order_by(ChatMessage.id)
-    ).all()
+        .order_by(ChatMessage.id)).all()
     return "\n".join(f"{m.role.upper()}: {m.content}" for m in msgs[-8:])
 
 
 def _merge_fields(stored: dict, data: dict | None) -> dict:
     fields = dict((stored or {}).get("fields") or {})
-    for key, _ in FIELD_ORDER:
-        value = (data or {}).get(key)
-        if value not in (None, ""):
-            fields[key] = value
+    for k, v in (data or {}).items():
+        if v not in (None, ""):
+            fields[k] = str(v).strip()
     return fields
 
 
 def _context(fields: dict, photo: str | None) -> str:
-    known = {k: v for k, v in fields.items()}
+    known = dict(fields)
     if known.get("description") and not known.get("name"):
-        words = str(known["description"]).split()
+        words = known["description"].split()
         known["name"] = " ".join(words[:5]).strip(" ,.-").title()
-    missing = [label for key, label in FIELD_ORDER if key not in known]
+    missing = [k for k in REQUIRED_FIELDS if k not in known]
     lines = [f"KNOWN: {json.dumps(known, ensure_ascii=False)}",
              f"MISSING: {missing or 'nothing — summarise & confirm'}"]
     if photo:
-        lines.append("A reference photo was attached by the client.")
+        lines.append("A reference photo was attached.")
     return "\n".join(lines)
 
 
 @router.post("/start")
-def start(user: User = Depends(get_current_user),
-          session: Session = Depends(get_session)):
+def start_chat(user: User = Depends(get_current_user),
+               session: Session = Depends(get_session)):
     if not user.account_id:
         raise HTTPException(403, "client accounts only")
-    if not configured_chain():
-        return {"session_id": None, "reply": None, "llm": False}
 
     cs = ChatSession(account_id=user.account_id, user_id=user.id,
                      purpose="spec_intake", collected_json={"fields": {}},
@@ -111,81 +98,22 @@ def start(user: User = Depends(get_current_user),
     session.add(cs)
     session.flush()
 
-    client = LLMClient()
-    context = _context({}, None)
-    resp = client.complete(
-        context + "\n\nThe client just opened the chat. Greet them warmly and "
-        "ask what they would like us to build.")
-    if resp is None:
-        session.rollback()
-        return {"session_id": None, "reply": None, "llm": False}
-    data = extract_json(resp.content) or {}
-    reply = data.get("reply") or (
-        "Hi! I'm the Ousus assistant. Tell me what you'd like us to build.")
-    session.add(ChatMessage(session_id=cs.id, role="assistant", content=reply))
+    greeting = ("Hi! I'm the Ousus assistant. Tell me what you'd "
+                "like us to build.")
+    llm_ok = bool(configured_chain())
+    if llm_ok:
+        try:
+            cl = LLMClient()
+            resp = cl.complete("The client just opened the chat.")
+            if resp:
+                d = extract_json(resp.content) or {}
+                greeting = d.get("reply") or greeting
+        except Exception:
+            pass
+
+    session.add(ChatMessage(session_id=cs.id, role="assistant", content=greeting))
     session.commit()
-    return {"session_id": cs.id, "reply": reply, "llm": True}
-
-
-def _heuristic_fill(session: Session, cs: ChatSession, fields: dict,
-                    extra_text: str = "") -> None:
-    """Safety net: pull required fields straight from the client's own words
-    so completion never depends on the model restating them."""
-    msgs = session.scalars(
-        select(ChatMessage).where(ChatMessage.session_id == cs.id,
-                                  ChatMessage.role == "client")
-        .order_by(ChatMessage.id)
-    ).all()
-    contents = [m.content for m in msgs]
-    if extra_text:
-        contents.append(extra_text)
-    blob = " ".join(contents)
-    low = blob.lower()
-
-    if not fields.get("description") and contents and max(
-            (len(c) for c in contents), default=0) > 10:
-        fields["description"] = max(contents, key=len)[:300]
-    if fields.get("description") and not fields.get("name"):
-        words = str(fields["description"]).split()
-        fields["name"] = " ".join(words[:5]).strip(" ,.-").title()
-
-    if not str(fields.get("quantity") or "").strip():
-        m = (re.search(r"(\d+(?:\.\d+)?)\s*(?:units?|pcs|pieces|pieces)", low)
-             or re.search(r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b\s*\w*\s*(?:units?|pcs|pieces)", low)
-             or re.search(r"\b(?:quantity|qty)[:,]?\s*(\d+)", low))
-        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-                 "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
-        if not m:
-            m2 = re.findall(r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\b", low)
-            if m2:
-                fields["quantity"] = float(words[m2[-1]])
-        else:
-            # do NOT auto-submit — hand the collected build back so the
-            # client keeps shopping and submits everything at checkout
-            cs.status = "collected"
-            cs.collected_json = {"fields": fields,
-                                 "photo": stored.get("photo", "")}
-            session.add(ChatMessage(
-                session_id=cs.id, role="assistant",
-                content=f"Added '{fields['name']}' to your request."))
-            session.commit()
-            return {"llm": True, "complete": True,
-                    "custom_line": {
-                        "name": fields["name"],
-                        "description": desc,
-                        "photo": stored.get("photo", ""),
-                        "quantity": qty if isinstance(qty, float) else 1,
-                        "material_finish": material,
-                    },
-                    "reply": data["reply"]}
-
-    session.add(ChatMessage(session_id=cs.id, role="assistant",
-                            content=data.get("reply", "")))
-    cs.collected_json = {"fields": fields, "photo": stored.get("photo", ""),
-                         "pending_data": data.get("data")}
-    session.commit()
-    return {"llm": True, "complete": False,
-                    "reply": data.get("reply") or "Could you confirm that once more?"}
+    return {"session_id": cs.id, "reply": greeting, "llm": llm_ok}
 
 
 class PhotoIn(BaseModel):
@@ -200,7 +128,7 @@ def attach_photo(session_id: int, body: PhotoIn,
     if not cs or cs.user_id != user.id:
         raise HTTPException(404, "chat session not found")
     if not body.url.startswith("/uploads/"):
-        raise HTTPException(422, "invalid upload url")
+        raise HTTPException(422, "invalid upload URL")
     stored = dict(cs.collected_json or {})
     stored["photo"] = body.url
     cs.collected_json = stored
@@ -208,15 +136,98 @@ def attach_photo(session_id: int, body: PhotoIn,
     return {"ok": True}
 
 
+def _create_custom_spec(session: Session, cs, user: User, fields: dict,
+                        photo: str | None) -> dict:
+    """Create the spec from fully-collected chat fields."""
+    code = next_spec_code(session)
+    name = fields.get("name") or fields.get("description", "")[:60].title()
+    desc = fields.get("description", "")
+    material = fields.get("material_finish") or ""
+    structured = {
+        "items": [],
+        "custom": [{"name": name, "description": desc,
+                     "photo": photo or "", "quantity": fields.get("quantity", 1),
+                     "material_finish": material}],
+        "finish": material,
+        "site": fields.get("site") or "",
+        "required_raw": fields.get("required_raw") or "",
+    }
+    spec = Spec(
+        code=code, account_id=user.account_id,
+        title=name[:200], raw_text=f"Custom: {desc}",
+        structured_json=structured,
+        source="chat_intake", status="pending_review",
+    )
+    session.add(spec)
+    cs.status = "submitted"
+    cs.collected_json = {"fields": fields, "photo": photo}
+    session.commit()
+    return {"code": code, "status": spec.status}
+
+
+@router.post("/{session_id}/message")
+def chat_message(session_id: int, body: MessageIn,
+                 user: User = Depends(get_current_user),
+                 session: Session = Depends(get_session)):
+    cs = session.get(ChatSession, session_id)
+    if not cs or cs.user_id != user.id:
+        raise HTTPException(404, "chat session not found")
+    if cs.status != "active":
+        raise HTTPException(409, "request already submitted")
+    session.add(ChatMessage(session_id=cs.id, role="client",
+                            content=body.text))
+
+    stored = dict(cs.collected_json or {})
+    fields = _merge_fields(stored, stored.get("pending_data"))
+
+    # try LLM first
+    if configured_chain():
+        prompt = (_history(session, cs) +
+                  f"\nCLIENT: {body.text}" +
+                  "\n\nSERVER CONTEXT:\n" +
+                  _context(fields, stored.get("photo")))
+        resp = LLMClient().complete(prompt, SYSTEM_PROMPT)
+        if resp:
+            data = extract_json(resp.content)
+            if data and data.get("reply"):
+                # merge model-extracted fields
+                new_fields = _merge_fields(fields, data.get("data"))
+                missing = [f for f in REQUIRED_FIELDS if f not in new_fields]
+                if data.get("complete") and not missing:
+                    result = _create_custom_spec(session, cs, user,
+                                                 new_fields,
+                                                 stored.get("photo"))
+                    return {**result, "llm": True}
+                session.add(ChatMessage(session_id=cs.id,
+                                        role="assistant",
+                                        content=data["reply"]))
+                cs.collected_json = {"fields": new_fields}
+                session.commit()
+                return {"llm": True, "complete": False,
+                        "reply": data["reply"]}
+
+    # all providers failed -> deterministic guided interview
+    stored["guided"] = True
+    cs.collected_json = stored
+    session.commit()
+    result = guided_turn(session, cs, user, stored, fields, body.text)
+    result["guided"] = True
+    return result
+
+
+def next_spec_code(session: Session) -> str:
+    codes = session.scalars(select(Spec.code)).all()
+    nums = [int(m.group(1)) for c in codes if (m := re.match(r"J-(\d+)", c))]
+    return f"J-{max(nums, default=0) + 1:03d}"
+
+
 @router.get("/sessions/mine")
 def my_sessions(user: User = Depends(get_current_user),
                 session: Session = Depends(get_session)):
     sessions = session.scalars(
         select(ChatSession).where(ChatSession.user_id == user.id)
-        .order_by(ChatSession.id.desc())
-    ).all()
-    return [{"id": s.id, "status": s.status, "purpose": s.purpose}
-            for s in sessions]
+        .order_by(ChatSession.id.desc())).all()
+    return [{"id": s.id, "status": s.status} for s in sessions]
 
 
 @router.post("/{session_id}/guided-switch")
