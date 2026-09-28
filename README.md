@@ -119,7 +119,20 @@ Client request (free text or catalog cart)
 
 ## Screenshots
 
-*(Screenshots coming soon)*
+**Landing page** — public storefront with real product photography and the platform pitch
+![Landing page](Images/Screenshot%202026-09-28%20204909.png)
+
+**Service catalog** — 24 seeded products across 4 categories, ready to add to a request
+![Service catalog](Images/Screenshot%202026-09-28%20204923.png)
+
+**Custom build assistant** — free-text requests handled by the LLM-extraction chat, falling back to a guided form if every provider is unavailable
+![Custom build chat](Images/Screenshot%202026-09-28%20205000.png)
+
+**Resources view** — live material stock and weekly fabrication capacity the estimation engine schedules against
+![Resources — material stock & capacity](Images/Screenshot%202026-09-28%20205029.png)
+
+**Manager dashboard** — daily production summary: active/overdue/blocked projects, portfolio by stage, capacity load, full project register
+![Manager daily summary dashboard](Images/Screenshot%202026-09-28%20205101.png)
 
 ## Running it
 
