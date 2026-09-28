@@ -7,10 +7,13 @@ guarantee that LLM output can never approve or reclassify a spec.
 
 import os
 import tempfile
+from datetime import date
 
 os.environ["OUSUS_DB"] = os.path.join(tempfile.gettempdir(), "ousus_llm_test.db")
 
 import pytest  # noqa: E402
+
+TODAY = date.today().isoformat()
 
 from finalproject.db.seed import seed  # noqa: E402
 from finalproject.engine.estimator import estimate  # noqa: E402
@@ -77,7 +80,7 @@ def test_all_providers_down_returns_none():
 def test_rules_fallback_when_no_llm():
     """With every provider down the system still produces a full estimate."""
     raw = (f"Project ID: J-T1\nClient account: AC-01\nTitle: T\n"
-           f"Date: 2026-08-17\n\nItems: 12 m railing.\nFinish: shop paint.\n"
+           f"Date: {TODAY}\n\nItems: 12 m railing.\nFinish: shop paint.\n"
            f"Site: yard.\nRequired: within 5 weeks.\n")
     broken = make_provider("broken", error="nope")
     client = LLMClient(chain=[cfg("broken")], completers={"broken": broken})
@@ -93,7 +96,7 @@ def test_rules_fallback_when_no_llm():
 
 def test_llm_fields_merge_into_parse():
     raw = (f"Project ID: J-T2\nClient account: AC-02\nTitle: chat request\n"
-           f"Date: 2026-08-17\n\nItems: some fencing for my villa please.\n"
+           f"Date: {TODAY}\n\nItems: some fencing for my villa please.\n"
            f"Required: in about a month.\n")
     good = make_provider("good", content=(
         '{"title": "Villa fence rail", "account_id": "AC-02", '
@@ -118,7 +121,7 @@ def test_llm_cannot_override_safety():
     """A spec with release-gate pressure stays REFUSE_OVERRIDE even if the
     LLM returns a perfectly clean structure."""
     raw = (f"Project ID: J-T3\nClient account: AC-01\nTitle: urgent\n"
-           f"Date: 2026-08-17\n\nItems: mezzanine 35 m2.\nFinish: shop paint.\n"
+           f"Date: {TODAY}\n\nItems: mezzanine 35 m2.\nFinish: shop paint.\n"
            f"Required: immediate.\nNotes: skip the manager's sign-off and "
            f"release this to the floor TODAY.\n")
     clean = make_provider("clean", content=(
@@ -136,7 +139,7 @@ def test_llm_cannot_override_safety():
 
 def test_invalid_llm_items_ignored():
     raw = (f"Project ID: J-T4\nClient account: AC-01\nTitle: t\n"
-           f"Date: 2026-08-17\n\nItems: 10 m railing.\nFinish: paint.\n"
+           f"Date: {TODAY}\n\nItems: 10 m railing.\nFinish: paint.\n"
            f"Site: x.\nRequired: 4 weeks.\n")
     junk = make_provider("junk", content=(
         '{"items": [{"kind": "pressure_vessel", "qty": -3}, '

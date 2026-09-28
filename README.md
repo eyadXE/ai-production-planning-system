@@ -1,12 +1,12 @@
-# Ousus Production Platform
+# AI Production Planning System
 
-AI-assisted production planning & tracking platform for **Ousus**, a steel
-fabrication company. A client's written request becomes a complete production
-plan — materials, labour hours, price, schedule — reviewed by engineers and
-released only with management sign-off. Every figure is traced to a handbook
-clause; the LLM never computes or approves anything.
+AI-assisted production planning & tracking platform, built for **Ousus**, a
+steel fabrication company. A client's written request becomes a complete
+production plan — materials, labour hours, price, schedule — reviewed by
+engineers and released only with management sign-off. Every figure is traced
+to a handbook clause; the LLM never computes or approves anything.
 
-**Repo:** github.com/eyadXE/ousus-production-platform (private)
+**Repo:** github.com/eyadXE/ai-production-planning-system
 
 ---
 

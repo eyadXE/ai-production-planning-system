@@ -1,0 +1,21 @@
+# ai-production-planning-system — copy/paste run commands (PowerShell)
+# Needs 2 terminals (backend + frontend), both already cd'd into this folder.
+
+# ===== TERMINAL 1 — Backend =====
+python -m venv .venv
+.venv\Scripts\pip install -e . pytest python-dotenv python-multipart email-validator
+copy .env.example .env
+.venv\Scripts\python -m finalproject.db.seed --fresh
+.venv\Scripts\uvicorn finalproject.api.main:app --port 8000
+# Leave this running. API docs: http://localhost:8000/docs
+
+# ===== TERMINAL 2 — Frontend (new window, cd into this same project folder) =====
+cd frontend
+npm install
+npm run build
+npm run start
+# Open: http://localhost:3100  <- this is what you record
+
+# Demo login (password "demo1234" for all):
+#   manager@oususapp.com | estimator@oususapp.com | engineer@oususapp.com
+#   client@oususapp.com  | viewer@oususapp.com

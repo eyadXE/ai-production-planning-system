@@ -344,9 +344,13 @@ def test_daily_summary_matches_golden_expectations(manager):
     blocked = {p["code"]: p for p in s["blocked_on_materials"]}
     assert "P-103" in blocked, "P-103 must be named blocked on materials"
     cap = s["capacity"]
+    # NOTE: these week labels are tied to OUSUS/Ousus_data/capacity.json,
+    # which is generated relative to "today" (see _gen_mock_data.py in the
+    # project root history / HOW_TO_RUN.md) — regenerate both together if
+    # the capacity data is ever rebuilt on a different date.
     assert set(cap["fully_booked_weeks"]) == {
-        "2026-W37", "2026-W38", "2026-W39", "2026-W40"}
-    assert cap["first_meaningful_free_week"] == "2026-W41"
+        "2026-W41", "2026-W42", "2026-W43", "2026-W44"}
+    assert cap["first_meaningful_free_week"] == "2026-W45"
     assert "approval" in s["note"].lower()
 
 
